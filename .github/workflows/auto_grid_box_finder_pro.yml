@@ -1,1 +1,47 @@
 
+name: Auto Grid Box Finder PRO
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pandas
+      - name: Run
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          MARKET: ${{ secrets.MARKET }}
+          INTERVAL: ${{ secrets.INTERVAL }}
+          LONG_HRS: ${{ secrets.LONG_HRS }}
+          RECENT_HRS: ${{ secrets.RECENT_HRS }}
+          TOPK: ${{ secrets.TOPK }}
+          QUOTE: ${{ secrets.QUOTE }}
+          MAX_SYMBOLS: ${{ secrets.MAX_SYMBOLS }}
+          VOL24_MIN_Q: ${{ secrets.VOL24_MIN_Q }}
+          LONG_RANGE_MIN_PCT: ${{ secrets.LONG_RANGE_MIN_PCT }}
+          LONG_SLOPE_MAX_PCT: ${{ secrets.LONG_SLOPE_MAX_PCT }}
+          LONG_Q_LOW: ${{ secrets.LONG_Q_LOW }}
+          LONG_Q_HIGH: ${{ secrets.LONG_Q_HIGH }}
+          LONG_CONTAIN_MIN: ${{ secrets.LONG_CONTAIN_MIN }}
+          RECENT_ATR_MIN_PCT: ${{ secrets.RECENT_ATR_MIN_PCT }}
+          RECENT_TOUCH_MIN: ${{ secrets.RECENT_TOUCH_MIN }}
+          RECENT_ALT_MIN: ${{ secrets.RECENT_ALT_MIN }}
+          RECENT_CONTAIN_MIN: ${{ secrets.RECENT_CONTAIN_MIN }}
+          TOUCH_EPS_PCT: ${{ secrets.TOUCH_EPS_PCT }}
+          GRID_COUNT: ${{ secrets.GRID_COUNT }}
+        run: |
+          python auto_grid_box_finder_pro.py
