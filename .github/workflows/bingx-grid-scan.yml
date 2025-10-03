@@ -29,5 +29,8 @@ jobs:
           TOP_K: ${{ vars.TOP_K }}
           ATR_PCT_MIN: ${{ vars.ATR_PCT_MIN }}
           RANGE_PCT_MIN: ${{ vars.RANGE_PCT_MIN }}
+          ADX_MAX: ${{ vars.ADX_MAX }}
+          MID_CROSS_MIN: ${{ vars.MID_CROSS_MIN }}
+          DRIFT_MAX_RATIO: ${{ vars.DRIFT_MAX_RATIO }}
         run: |
           python scan_bingx_grid.py
