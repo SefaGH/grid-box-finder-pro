@@ -18,7 +18,6 @@ def load_nonempty_lines(path, limit=10):
     return lines[:limit]
 
 if __name__ == "__main__":
-    # Accept multiple pairs: <file> <tf> [<file> <tf> ...]
     token, chat_id = os.environ.get("BOT_TOKEN",""), os.environ.get("CHAT_ID","")
     if not token or not chat_id:
         sys.exit(0)
