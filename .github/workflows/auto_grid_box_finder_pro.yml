@@ -1,5 +1,5 @@
 
-name: Auto Grid Box Finder PRO (mirrors v2)
+name: Auto Grid Box Finder PRO
 
 on:
   schedule:
@@ -22,7 +22,6 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          MARKET: ${{ secrets.MARKET }}
           INTERVAL: ${{ secrets.INTERVAL }}
           LONG_HRS: ${{ secrets.LONG_HRS }}
           RECENT_HRS: ${{ secrets.RECENT_HRS }}
