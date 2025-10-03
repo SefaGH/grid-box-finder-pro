@@ -1,7 +1,7 @@
-name: BingX Grid — Silent Scan + Single Notify (test)
+name: BingX Grid — Silent Scan + Single Notify (relaxed)
 
 on:
-  workflow_dispatch:  # manual only for testing
+  workflow_dispatch:
 
 concurrency:
   group: bingx-grid-singleton
@@ -9,13 +9,15 @@ concurrency:
 
 env:
   PY_VERSION: "3.11"
-  MIN_RANGE: "1.5"
-  MAX_DRIFT: "0.35"
-  MAX_CV: "0.45"
-  MIN_SCORE: "40"
-  FB_MIN_SCORE: "50"
-  FB_MAX_CV: "0.45"
-  FB_MAX_DRIFT: "0.35"
+
+  MIN_RANGE: "1.2"
+  MAX_DRIFT: "0.40"
+  MAX_CV:   "0.50"
+  MIN_SCORE:"35"
+
+  FB_MIN_SCORE:  "45"
+  FB_MAX_CV:     "0.50"
+  FB_MAX_DRIFT:  "0.40"
 
 jobs:
   scan-and-filter:
@@ -35,19 +37,27 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           chmod +x run_scan_muted_bingx.sh || true
       - name: Run silent scan (${{ matrix.tf }})
+        env:
+          BOT_TOKEN: "0"
+          CHAT_ID: "0"
         run: ./run_scan_muted_bingx.sh ${{ matrix.tf }}
       - name: Filter Wide Range Candidates (${{ matrix.tf }})
         run: |
           TF="${{ matrix.tf }}"
-          # TEMP: grid_filter.py supports 3m/15m/1h only; map 5m -> 3m until upgraded
           FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
           echo "Using filter timeframe: $FTF (from TF=$TF)"
           python grid_filter.py scan_${TF}.txt             --tf "$FTF"             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 20             --print-okx | tee filtered_${TF}.txt
       - name: Send Telegram (only if candidates) — ${{ matrix.tf }}
+        if: always()
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python telegram_notify.py filtered_${{ matrix.tf }}.txt ${{ matrix.tf }}
+          CHAT_ID:  ${{ secrets.CHAT_ID }}
+        run: |
+          if grep -q "OKX ▶[[:space:]]*Lower=" "filtered_${{ matrix.tf }}.txt"; then
+            python telegram_notify.py "filtered_${{ matrix.tf }}.txt" "${{ matrix.tf }}"
+          else
+            echo "No candidates; no Telegram."
+          fi
       - name: Upload artifacts (${{ matrix.tf }})
         uses: actions/upload-artifact@v4
         with:
