@@ -1,0 +1,53 @@
+name: BingX Grid — Silent Scan + Single Notify (test)
+
+on:
+  workflow_dispatch:  # manual only for testing
+
+concurrency:
+  group: bingx-grid-singleton
+  cancel-in-progress: true
+
+env:
+  PY_VERSION: "3.11"
+  MIN_RANGE: "1.5"
+  MAX_DRIFT: "0.35"
+  MAX_CV: "0.45"
+  MIN_SCORE: "40"
+  FB_MIN_SCORE: "50"
+  FB_MAX_CV: "0.45"
+  FB_MAX_DRIFT: "0.35"
+
+jobs:
+  scan-and-filter:
+    strategy:
+      matrix:
+        tf: ["5m","15m","1h"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          chmod +x run_scan_muted_bingx.sh || true
+      - name: Run silent scan (${{ matrix.tf }})
+        run: ./run_scan_muted_bingx.sh ${{ matrix.tf }}
+      - name: Filter Wide Range Candidates (${{ matrix.tf }})
+        run: |
+          python grid_filter.py scan_${{ matrix.tf }}.txt             --tf ${{ matrix.tf }}             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 20             --print-okx | tee filtered_${{ matrix.tf }}.txt
+      - name: Send Telegram (only if candidates) — ${{ matrix.tf }}
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python telegram_notify.py filtered_${{ matrix.tf }}.txt ${{ matrix.tf }}
+      - name: Upload artifacts (${{ matrix.tf }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: bingx-grid-${{ matrix.tf }}-${{ github.run_id }}
+          path: |
+            scan_${{ matrix.tf }}.txt
+            filtered_${{ matrix.tf }}.txt
