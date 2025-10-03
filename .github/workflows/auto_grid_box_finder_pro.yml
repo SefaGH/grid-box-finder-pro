@@ -40,5 +40,10 @@ jobs:
           RECENT_CONTAIN_MIN: ${{ secrets.RECENT_CONTAIN_MIN }}
           TOUCH_EPS_PCT: ${{ secrets.TOUCH_EPS_PCT }}
           GRID_COUNT: ${{ secrets.GRID_COUNT }}
+          S_ALT_RATIO_MIN: ${{ secrets.S_ALT_RATIO_MIN }}
+          S_TOUCH_BAL_MAX: ${{ secrets.S_TOUCH_BAL_MAX }}
+          S_ATR_CV_MAX: ${{ secrets.S_ATR_CV_MAX }}
+          S_DRIFT_MAX_PCT: ${{ secrets.S_DRIFT_MAX_PCT }}
+          S_INSIDE_REC_MIN: ${{ secrets.S_INSIDE_REC_MIN }}
         run: |
           python auto_grid_box_finder_pro.py
