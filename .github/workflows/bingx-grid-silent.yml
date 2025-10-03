@@ -13,7 +13,7 @@ env:
   MIN_RANGE: "1.2"
   MAX_DRIFT: "0.40"
   MAX_CV:   "0.50"
-  MIN_SCORE:"35"
+  MIN_SCORE: "35"
 
   FB_MIN_SCORE:  "45"
   FB_MAX_CV:     "0.50"
