@@ -32,5 +32,8 @@ jobs:
           ADX_MAX: ${{ vars.ADX_MAX }}
           MID_CROSS_MIN: ${{ vars.MID_CROSS_MIN }}
           DRIFT_MAX_RATIO: ${{ vars.DRIFT_MAX_RATIO }}
+          MIN_QVOL_USDT: ${{ vars.MIN_QVOL_USDT }}
+          LISTED_MIN_DAYS: ${{ vars.LISTED_MIN_DAYS }}
+          MIN_GRID_K_ATR: ${{ vars.MIN_GRID_K_ATR }}
         run: |
           python scan_bingx_grid.py
