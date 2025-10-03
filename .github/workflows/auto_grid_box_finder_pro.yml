@@ -45,5 +45,7 @@ jobs:
           S_ATR_CV_MAX: ${{ secrets.S_ATR_CV_MAX }}
           S_DRIFT_MAX_PCT: ${{ secrets.S_DRIFT_MAX_PCT }}
           S_INSIDE_REC_MIN: ${{ secrets.S_INSIDE_REC_MIN }}
+          SHOW_ONLY_S: ${{ secrets.SHOW_ONLY_S }}
+          SHOW_INCLUDE_NEAR: ${{ secrets.SHOW_INCLUDE_NEAR }}
         run: |
           python auto_grid_box_finder_pro.py
