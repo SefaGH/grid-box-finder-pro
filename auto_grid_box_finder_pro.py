@@ -1,15 +1,15 @@
 
-import os, math, time, random, requests, numpy as np, pandas as pd
+import os, math, time, requests, numpy as np, pandas as pd
 
 # ===== ENV / Secrets (mevcut isimlerle uyumlu) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN"); CHAT_ID = os.getenv("CHAT_ID")
-INTERVAL = os.getenv("INTERVAL","5m").strip()                # 1m/3m/5m/15m/30m/1h
-LONG_HRS = float(os.getenv("LONG_HRS","96"))                 # regime window
-RECENT_HRS = float(os.getenv("RECENT_HRS","3"))              # activation window
+INTERVAL = os.getenv("INTERVAL","5m").strip()                # OKX bars: 1m/3m/5m/15m/30m/1H/2H/4H
+LONG_HRS = float(os.getenv("LONG_HRS","96"))
+RECENT_HRS = float(os.getenv("RECENT_HRS","3"))
 TOPK = int(os.getenv("TOPK","12"))
 QUOTE = os.getenv("QUOTE","USDT").strip().upper()
 MAX_SYMBOLS = int(os.getenv("MAX_SYMBOLS","150"))
-VOL24_MIN_Q = float(os.getenv("VOL24_MIN_Q","30000000"))     # Bybit: 24h turnover (USDT) min
+VOL24_MIN_Q = float(os.getenv("VOL24_MIN_Q","30000000"))     # 24h quote turnover (USDT) min
 
 # Regime (long)
 LONG_RANGE_MIN_PCT = float(os.getenv("LONG_RANGE_MIN_PCT","15.0"))
@@ -26,13 +26,6 @@ RECENT_CONTAIN_MIN = float(os.getenv("RECENT_CONTAIN_MIN","0.70"))
 TOUCH_EPS_PCT = float(os.getenv("TOUCH_EPS_PCT","0.25"))
 GRID_COUNT = int(os.getenv("GRID_COUNT","12"))
 
-# ---- Bybit host list (opsiyonel override: BYBIT_HOSTS=host1,host2) ----
-HOSTS_ENV = os.getenv("BYBIT_HOSTS","").strip()
-if HOSTS_ENV:
-    BYBIT_HOSTS = [h.strip().rstrip('/') for h in HOSTS_ENV.split(',') if h.strip()]
-else:
-    BYBIT_HOSTS = ["https://api.bybit.com"]  # resmi ana domain
-
 assert BOT_TOKEN and CHAT_ID, "BOT_TOKEN/CHAT_ID gerekli."
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 HEADERS = {"Accept":"application/json","User-Agent":"grid-box-finder/1.1 (+github-actions)"}
@@ -43,71 +36,52 @@ def send(msg: str):
     except requests.RequestException:
         pass
 
-def _is_json_like(r):
-    ct = (r.headers.get("Content-Type") or "").lower()
-    if "application/json" in ct: return True
-    t = (r.text or "").lstrip()
-    return t.startswith("{") or t.startswith("[")
-
-def _safe_json(r):
-    if not (r.text and r.text.strip()):
-        raise ValueError("empty body")
-    if not _is_json_like(r):
-        raise ValueError("non-json body")
-    return r.json()
-
-def _try_hosts(path, params=None, tries=4, sleep=0.8):
+def okx_get(path, params=None, tries=5, sleep=0.8):
     last=None
     for _ in range(tries):
-        for host in BYBIT_HOSTS:
-            url = host + path
-            try:
-                r = requests.get(url, params=params, headers=HEADERS, timeout=25)
-                if r.status_code >= 500:
-                    continue
-                j = _safe_json(r)
-                # Bybit v5 standard: retCode == 0 success
-                if isinstance(j, dict) and j.get("retCode", 0) != 0 and "retCode" in j:
-                    # non-success but json: try next host/try
-                    last = RuntimeError(f"bybit retCode {j.get('retCode')}")
-                    continue
-                return j
-            except Exception as e:
-                last = e
-                continue
-        time.sleep(sleep + random.random()*0.5)
+        try:
+            r=requests.get("https://www.okx.com"+path, params=params, headers=HEADERS, timeout=25)
+            if r.status_code>=500:
+                time.sleep(sleep); continue
+            t=(r.text or "").strip()
+            if not t: time.sleep(sleep); continue
+            j=r.json()
+            if j.get("code") not in ("0", 0):  # non-success
+                last=RuntimeError(f"okx code {j.get('code')} msg {j.get('msg')}")
+                time.sleep(sleep); continue
+            return j
+        except Exception as e:
+            last=e; time.sleep(sleep); continue
     if last: raise last
-    raise RuntimeError("bybit all hosts failed")
+    raise RuntimeError("okx no response")
 
-# ---------- Bybit Market (linear USDT Perp) ----------
-def bybit_symbols_usdt_linear():
-    out=[]; cursor=None
-    while True:
-        params={"category":"linear"}
-        if cursor: params["cursor"]=cursor
-        data=_try_hosts("/v5/market/instruments-info", params=params)
-        if data.get("retCode")!=0: break
-        for it in data["result"]["list"]:
-            if it.get("status")!="Trading": continue
-            sym=it["symbol"]
-            if not sym.endswith("USDT"): continue
-            out.append(sym)
-        cursor=data["result"].get("nextPageCursor")
-        if not cursor: break
+# ---------- OKX Market (USDT-margined perpetual swaps) ----------
+def okx_symbols_usdt_swap():
+    # instType=SWAP, uly like "BTC-USDT-SWAP". We'll filter quote currency USDT.
+    out=[]
+    data=okx_get("/api/v5/public/instruments", params={"instType":"SWAP"})
+    for it in data["data"]:
+        instId=it.get("instId","")
+        # USDT margined perpetual typically ends with "-USDT-SWAP"
+        if instId.endswith("-USDT-SWAP"):
+            out.append(instId)
     return out
 
-def bybit_top_by_turnover(symbols, topn, volmin):
-    data=_try_hosts("/v5/market/tickers", params={"category":"linear"})
+def okx_top_by_turnover(symbols, topn, volmin):
+    # We'll map using 24h tickers; OKX: /api/v5/market/tickers?instType=SWAP
+    data=okx_get("/api/v5/market/tickers", params={"instType":"SWAP"})
     S=set(symbols); rows=[]
-    for it in data["result"]["list"]:
-        sym=it["symbol"]
-        if sym not in S: continue
+    for it in data["data"]:
+        instId=it.get("instId")
+        if instId not in S: continue
         try:
-            q=float(it.get("turnover24h", "0"))
-            p=float(it.get("lastPrice","0"))
+            # 24h turnover in quote currency
+            q=float(it.get("volCcy24h","0"))
+            last=float(it.get("last","0"))
         except Exception:
             continue
-        if q>=volmin and p>0: rows.append((sym,q))
+        if q>=volmin and last>0:
+            rows.append((instId,q))
     rows.sort(key=lambda x:x[1], reverse=True)
     return [s for s,_ in rows[:topn]]
 
@@ -117,20 +91,21 @@ def bars_for_hours(interval, hours):
     need=int(math.ceil(hours*60/mins))+2
     return min(max(need,60), 1000)
 
-def bybit_interval_token(interval):
-    mapping={"1m":"1","3m":"3","5m":"5","15m":"15","30m":"30","1h":"60","2h":"120","4h":"240"}
-    return mapping.get(interval, "5")
+def okx_bar(interval):
+    mapping={"1m":"1m","3m":"3m","5m":"5m","15m":"15m","30m":"30m","1h":"1H","2h":"2H","4h":"4H"}
+    return mapping.get(interval, "5m")
 
-def klines_bybit(symbol, interval, hours):
+def klines_okx(instId, interval, hours):
     limit=bars_for_hours(interval, hours)
-    p={"category":"linear","symbol":symbol,"interval":bybit_interval_token(interval),"limit":min(1000,limit)}
-    data=_try_hosts("/v5/market/kline", params=p)
-    lst=data.get("result",{}).get("list",[])
+    params={"instId":instId,"bar":okx_bar(interval),"limit":min(100,limit)}  # OKX typically returns up to 100 per call; loop if needed
+    data=okx_get("/api/v5/market/candles", params=params)
+    lst=data.get("data",[])
     if not lst: return None
-    lst.sort(key=lambda x: int(x[0]))  # oldest->newest
-    h=np.array([float(x[3]) for x in lst])
-    l=np.array([float(x[4]) for x in lst])
-    c=np.array([float(x[5]) for x in lst])
+    # OKX returns newest first
+    lst.sort(key=lambda x:int(x[0]))
+    h=np.array([float(x[2]) for x in lst])
+    l=np.array([float(x[3]) for x in lst])
+    c=np.array([float(x[4]) for x in lst])
     return h,l,c
 
 def slope_pct(closes):
@@ -155,17 +130,15 @@ def band_features(closes, q_low, q_high, eps_pct):
     rng=(closes.max()-closes.min())/max(np.median(closes),1e-12)*100.0
     return low,mid,high,inside,touches,alts,rng
 
-def analyze(symbol):
-    # regime
-    long=klines_bybit(symbol, INTERVAL, LONG_HRS)
+def analyze(instId):
+    long=klines_okx(instId, INTERVAL, LONG_HRS)
     if not long: return None
     hL,lL,cL=long
     lowL,midL,highL,insideL,touchL,altL,rangeL=band_features(cL,LONG_Q_LOW,LONG_Q_HIGH,TOUCH_EPS_PCT)
     slopeL=slope_pct(cL)
     ok_regime=(rangeL>=LONG_RANGE_MIN_PCT) and (slopeL<=LONG_SLOPE_MAX_PCT) and (insideL>=LONG_CONTAIN_MIN)
 
-    # activation
-    rec=klines_bybit(symbol, INTERVAL, RECENT_HRS)
+    rec=klines_okx(instId, INTERVAL, RECENT_HRS)
     if not rec: return None
     hS,lS,cS=rec
     lowS,midS,highS,insideS,touchS,altS,rangeS=band_features(cS,0.15,0.85,TOUCH_EPS_PCT)
@@ -175,24 +148,17 @@ def analyze(symbol):
     score=(0.4*rangeL + 0.2*insideL*100 + 0.1*touchL + 0.1*altL - 0.3*slopeL
            + 0.3*atrS + 0.2*touchS + 0.2*altS + 0.2*insideS*100 - 0.3*slopeS)
 
-    return {"symbol":symbol,"regime":ok_regime,"activation":ok_act,"score":float(score),
+    return {"symbol":instId,"regime":ok_regime,"activation":ok_act,"score":float(score),
             "long_range":float(rangeL),"long_inside":float(insideL),"long_slope":float(slopeL),
             "recent_inside":float(insideS),"recent_touch":int(touchS),"recent_alt":int(altS),
             "recent_atr":float(atrS),"recent_slope":float(slopeS),
             "grid_low":float(lowL),"grid_mid":float(midL),"grid_high":float(highL)}
 
 def run():
-    # hızlı network test: server time
-    try:
-        _ = _try_hosts("/v5/market/time")
-    except Exception as e:
-        send(f"❌ Bybit network erişimi yok (Cloudflare/WAF olabilir): {e}")
-        raise
-
-    syms=bybit_symbols_usdt_linear()
-    pool=bybit_top_by_turnover(syms, MAX_SYMBOLS, VOL24_MIN_Q)
+    syms=okx_symbols_usdt_swap()
+    pool=okx_top_by_turnover(syms, MAX_SYMBOLS, VOL24_MIN_Q)
     if not pool:
-        send("⚠️ Pro Grid Finder (Bybit): evrende sembol yok."); return
+        send("⚠️ Pro Grid Finder (OKX): evrende sembol yok."); return
     rows=[]
     for s in pool:
         try:
@@ -201,19 +167,19 @@ def run():
         except Exception:
             pass
     if not rows:
-        send("⚠️ Pro Grid Finder (Bybit): veri toplanamadı."); return
+        send("⚠️ Pro Grid Finder (OKX): veri toplanamadı."); return
 
     picks=[r for r in rows if r["regime"] and r["activation"]]
     picks.sort(key=lambda x:x["score"], reverse=True)
     top=picks[:TOPK] if picks else rows[:TOPK]
 
-    hdr=(f"🧰 Pro Grid Box Finder — Bybit (linear USDT perp) — {INTERVAL} | Regime {int(LONG_HRS)}h + Activation {int(RECENT_HRS)}h\n"
+    hdr=(f"🧰 Pro Grid Box Finder — OKX (USDT swap) — {INTERVAL} | Regime {int(LONG_HRS)}h + Activation {int(RECENT_HRS)}h\n"
          f"Regime: range≥{LONG_RANGE_MIN_PCT}%, slope≤{LONG_SLOPE_MAX_PCT}%, inside≥{LONG_CONTAIN_MIN} | "
          f"Activation: ATR≥{RECENT_ATR_MIN_PCT}%, touches≥{RECENT_TOUCH_MIN}, alt≥{RECENT_ALT_MIN}, inside≥{RECENT_CONTAIN_MIN}")
     lines=[]
     for r in top:
         tag="✅" if r["regime"] and r["activation"] else "—"
-        lines.append(f"{tag} {r['symbol']:<10} | Lrng {r['long_range']:.1f}% Lins {r['long_inside']*100:.0f}% Lsl {r['long_slope']:.2f}% | "
+        lines.append(f"{tag} {r['symbol']:<16} | Lrng {r['long_range']:.1f}% Lins {r['long_inside']*100:.0f}% Lsl {r['long_slope']:.2f}% | "
                      f"Ratr {r['recent_atr']:.2f}% Rins {r['recent_inside']*100:.0f}% Rsl {r['recent_slope']:.2f}% "
                      f"T{r['recent_touch']} A{r['recent_alt']} | grid [{r['grid_low']:.6g} … {r['grid_high']:.6g}] mid {r['grid_mid']:.6g} | score {r['score']:.1f}")
     send(hdr + "\n" + "\n".join(lines))
