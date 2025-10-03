@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os, sys, re, json, urllib.request
-
 OKX_LINE = re.compile(r"OKX\s*▶\s*Lower=")
 
 def send_message(token, chat_id, text):

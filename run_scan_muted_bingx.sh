@@ -27,7 +27,4 @@ for H in 6 12 24; do
   run_cmd "--activation-hours ${H}" || true
 done
 
-echo "----- attempt: ONLY S-GRID -----" | tee -a "$OUT"
-run_cmd "--only-s-grid" || true
-
 echo ">>> Done."
