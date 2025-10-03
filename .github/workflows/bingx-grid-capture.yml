@@ -1,4 +1,4 @@
-name: BingX Grid — Capture OUT (manual, v8)
+name: BingX Grid — Capture OUT (manual, v9)
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
   scan-and-filter:
     strategy:
       matrix:
-        tf: ["15m"]
+        tf: ["5m","15m","1h"]
     runs-on: ubuntu-latest
 
     steps:
@@ -51,7 +51,7 @@ jobs:
           TF="${{ matrix.tf }}"
           FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
           echo "Using filter timeframe: $FTF (from TF=$TF)"
-          python grid_filter.py scan_${TF}.txt             --tf "$FTF"             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 20             --print-okx | tee filtered_${TF}.txt
+          python grid_filter.py scan_${TF}.txt             --tf "$FTF"             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 24             --print-okx | tee filtered_${TF}.txt
 
       - name: Send Telegram (only if candidates) — ${{ matrix.tf }}
         if: always()
