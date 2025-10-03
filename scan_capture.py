@@ -41,16 +41,16 @@ def _mirror_if_telegram(url, *args, **kwargs):
 
 def _post(url, *args, **kwargs):
     r = _mirror_if_telegram(url, *args, **kwargs)
-    return r if r is not None else _real_post(url, *args, **kwargs)
+    return r if r is not None else _req.post(url, *args, **kwargs)
 
 def _get(url, *args, **kwargs):
     r = _mirror_if_telegram(url, *args, **kwargs)
-    return r if r is not None else _real_get(url, *args, **kwargs)
+    return r if r is not None else _req.get(url, *args, **kwargs)
 
 def main():
-    import requests
-    requests.post = _post  # type: ignore
-    requests.get  = _get   # type: ignore
+    import requests  # noqa: F401
+    globals()["_req"].post = _post  # type: ignore
+    globals()["_req"].get  = _get   # type: ignore
     os.environ.setdefault("BOT_TOKEN", "0")
     os.environ.setdefault("CHAT_ID", "0")
     sys.argv = ["auto_grid_box_finder_pro.py"] + sys.argv[1:]
