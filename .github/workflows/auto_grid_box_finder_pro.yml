@@ -40,5 +40,6 @@ jobs:
           RECENT_CONTAIN_MIN: ${{ secrets.RECENT_CONTAIN_MIN }}
           TOUCH_EPS_PCT: ${{ secrets.TOUCH_EPS_PCT }}
           GRID_COUNT: ${{ secrets.GRID_COUNT }}
+          BYBIT_HOSTS: ${{ secrets.BYBIT_HOSTS }}
         run: |
           python auto_grid_box_finder_pro.py
