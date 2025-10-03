@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Capture Telegram sendMessage payloads (POST/GET; json/form/query) to STDOUT
-# and run auto_grid_box_finder_pro.py transparently.
 import sys, os, runpy
 from urllib.parse import urlparse, parse_qs
 import requests as _req

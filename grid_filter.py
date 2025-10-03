@@ -5,20 +5,26 @@ import re, sys, argparse
 from pathlib import Path
 
 DASH = r"(?:—|-)"
-ELLIPSIS = r"(?:…|\.{3})"
+ELLIPSIS = r"(?:…|\.\.\.)"
 
-RE_GRID = re.compile(
-    rf"^{DASH}\s+(?P<sym>[A-Z0-9/:\-]+)\s+\|.*?"
-    rf"grid\s*\[\s*(?P<low>[0-9.eE+-]+)\s*{ELLIPSIS}\s*(?P<high>[0-9.eE+-]+)\s*\]\s*"
-    rf"mid\s*(?P<mid>[0-9.eE+-]+)\s*\|.*?"
-    rf"score\s*(?P<score>[0-9]+(?:\.[0-9]+)?)\s*$"
+RE = re.compile(
+    rf"^{DASH}\s+(?P<sym>[A-Z0-9/:\-]+)\s+\|(?P<rest>.*?grid\s*\[\s*(?P<low>[0-9.eE+-]+)\s*{ELLIPSIS}\s*(?P<high>[0-9.eE+-]+)\s*\]\s*mid\s*(?P<mid>[0-9.eE+-]+)\s*\|\s*score\s*(?P<score>[0-9]+(?:\.[0-9]+)?)\s*)$"
 )
 
+def pick_float(pat, s, default=None):
+    m = re.search(pat, s)
+    return float(m.group(1)) if m else default
+
 def parse_line(line):
-    m = RE_GRID.search(line)
+    m = RE.search(line.strip())
     if not m:
         return None
     d = m.groupdict()
+    rest = d["rest"]
+    lrng  = pick_float(r"Lrng\s+([0-9.]+)%", rest)
+    cv    = pick_float(r"\bcv\s+([0-9.]+)\b", rest)
+    drift = pick_float(r"\bd\s+([0-9.]+)%", rest)
+    altR  = pick_float(r"\baltR\s+([0-9.]+)\b", rest) or 0.0
     return {
         "raw": line.rstrip(),
         "sym": d["sym"],
@@ -26,6 +32,10 @@ def parse_line(line):
         "high": float(d["high"]),
         "mid": float(d["mid"]),
         "score": float(d["score"]),
+        "lrng": lrng if lrng is not None else 0.0,
+        "cv": cv if cv is not None else 999.0,
+        "drift": drift if drift is not None else 999.0,
+        "altR": altR,
     }
 
 def main():
@@ -49,15 +59,28 @@ def main():
         sys.exit(0)
 
     lines = [ln for ln in p.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()]
-    parsed = [parse_line(ln) for ln in lines]
-    parsed = [x for x in parsed if x]
+    items = []
+    for ln in lines:
+        it = parse_line(ln)
+        if it:
+            items.append(it)
 
-    if not parsed:
+    if not items:
         print("⚠️ No parsable candidates found.")
         sys.exit(0)
 
-    parsed.sort(key=lambda x: x["score"], reverse=True)
-    kept = parsed[: args.top]
+    kept = []
+    for it in items:
+        is_fb = (it["altR"] or 0.0) > 0.0
+        if is_fb:
+            ok = (it["lrng"] >= args.min_range and it["cv"] <= args.fb_max_cv and it["drift"] <= args.fb_max_drift and it["score"] >= args.fb_min_score)
+        else:
+            ok = (it["lrng"] >= args.min_range and it["cv"] <= args.max_cv and it["drift"] <= args.max_drift and it["score"] >= args.min_score)
+        if ok:
+            kept.append(it)
+
+    kept.sort(key=lambda x: x["score"], reverse=True)
+    kept = kept[: args.top]
 
     if not kept:
         print("(no S-GRID matches)")

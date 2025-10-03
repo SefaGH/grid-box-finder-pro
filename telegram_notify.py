@@ -9,13 +9,13 @@ def send_message(token, chat_id, text):
     with urllib.request.urlopen(req, timeout=20) as resp:
         resp.read()
 
-def load_nonempty_lines(path, limit=10):
+def first_lines(path, n=8):
     try:
         txt = open(path, "r", encoding="utf-8", errors="ignore").read().strip()
     except Exception:
         return []
-    lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith("(") and "No parsable" not in ln]
-    return lines[:limit]
+    lines = [ln for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith("(") and "No parsable" not in ln]
+    return lines[:n]
 
 if __name__ == "__main__":
     token, chat_id = os.environ.get("BOT_TOKEN",""), os.environ.get("CHAT_ID","")
@@ -27,11 +27,11 @@ if __name__ == "__main__":
     parts = []
     for i in range(0, len(args), 2):
         path, tf = args[i], args[i+1]
-        lines = load_nonempty_lines(path, 10)
+        lines = first_lines(path, 8)
         if lines:
             parts.append(f"⏱ {tf}\n" + "\n".join(lines))
     if not parts:
         sys.exit(0)
-    text = "🧰 Grid Candidates\n" + "\n\n".join(parts)
+    text = "🧰 Grid Candidates — BingX\n" + "\n\n".join(parts)
     send_message(token, chat_id, text)
     print("Telegram sent.")

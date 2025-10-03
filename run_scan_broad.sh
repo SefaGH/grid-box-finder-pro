@@ -4,16 +4,11 @@ TF="${1:-15m}"
 OUT="scan_${TF}.txt"
 : > "$OUT"
 
-ARGS=(
-  --timeframe "$TF"
-  --regime 96h
-  --activation 3h
-  --pattern s_near
-  --fallback 1
-)
+run_cmd() {
+  local extra="$1"
+  python scan_capture.py --timeframe "$TF" $extra 2>&1 | tee -a "$OUT"
+}
 
-echo ">>> Running scan (broad) TF=$TF" | tee -a "$OUT"
-echo ">>> Effective args: ${ARGS[*]}" | tee -a "$OUT"
-
-# Route through capture so Telegram messages mirror to STDOUT
-python scan_capture.py "${ARGS[@]}" 2>&1 | tee -a "$OUT"
+echo ">>> Broad scan TF=$TF" | tee -a "$OUT"
+run_cmd "--regime 96h --activation 3h --pattern s_near --fallback 1" || true
+echo ">>> Done." | tee -a "$OUT"
