@@ -1,22 +1,28 @@
-name: BingX Grid — Broad Scan + Single Notify (v3)
+name: BingX Grid — Broad Scan + Single Notify (PR-ready)
 
 on:
   workflow_dispatch:
 
+concurrency:
+  group: bingx-grid-broad
+  cancel-in-progress: true
+
+env:
+  PY_VERSION: "3.11"
+  MIN_RANGE: "1.0"
+  MAX_DRIFT: "0.40"
+  MAX_CV:   "0.60"
+  MIN_SCORE:"25"
+  FB_MIN_SCORE: "40"
+  FB_MAX_CV:    "0.60"
+  FB_MAX_DRIFT: "0.40"
+
 jobs:
   scan_and_filter:
+    strategy:
+      matrix:
+        tf: ["5m","15m","1h"]
     runs-on: ubuntu-latest
-    env:
-      PY_VERSION: "3.11"
-      MIN_RANGE: "0.9"
-      MAX_DRIFT: "0.50"
-      MAX_CV: "0.70"
-      MIN_SCORE: "22"
-      FB_MIN_SCORE: "38"
-      FB_MAX_CV: "0.70"
-      FB_MAX_DRIFT: "0.50"
-      BOT_TOKEN: "${{ secrets.BOT_TOKEN || '0' }}"
-      CHAT_ID:   "${{ secrets.CHAT_ID   || '0' }}"
 
     steps:
       - name: Checkout
@@ -33,35 +39,31 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           chmod +x run_scan_broad.sh || true
 
-      - name: Scan (broad) — capture Telegram → STDOUT
-        run: |
-          for TF in 5m 15m 1h; do
-            ./run_scan_broad.sh "$TF"
-            echo ">>> PREVIEW scan_${TF}.txt (first 60 lines)"
-            sed -n '1,60p' "scan_${TF}.txt" || true
-          done
+      - name: Run broad scan (${{ matrix.tf }})
+        env:
+          BOT_TOKEN: "0"
+          CHAT_ID:  "0"
+        run: ./run_scan_broad.sh ${{ matrix.tf }}
 
-      - name: Filter results
+      - name: Filter (${{ matrix.tf }})
         run: |
-          for TF in 5m 15m 1h; do
-            FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
-            echo "Using filter timeframe: $FTF (from TF=$TF)"
-            python grid_filter.py "scan_${TF}.txt" --tf "$FTF"               --min-range "$MIN_RANGE" --max-drift "$MAX_DRIFT" --max-cv "$MAX_CV"               --min-score "$MIN_SCORE" --fb-min-score "$FB_MIN_SCORE"               --fb-max-cv "$FB_MAX_CV" --fb-max-drift "$FB_MAX_DRIFT"               --top 24 --print-okx | tee "filtered_${TF}.txt"
-          done
+          TF="${{ matrix.tf }}"
+          FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
+          echo "Using filter timeframe: $FTF (from TF=$TF)"
+          python grid_filter.py scan_${TF}.txt             --tf "$FTF"             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 24             --print-okx | tee filtered_${TF}.txt
 
-      - name: Telegram notify (only if we have lines)
-        if: ${{ env.BOT_TOKEN != '0' && env.CHAT_ID != '0' }}
+      - name: Telegram (single message when candidates exist) — ${{ matrix.tf }}
+        if: always()
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID:  ${{ secrets.CHAT_ID }}
         run: |
-          python telegram_notify.py "filtered_5m.txt" 5m "filtered_15m.txt" 15m "filtered_1h.txt" 1h
+          python telegram_notify.py filtered_${{ matrix.tf }}.txt ${{ matrix.tf }}
 
-      - name: Upload artifacts
+      - name: Upload artifacts (${{ matrix.tf }})
         uses: actions/upload-artifact@v4
         with:
-          name: bingx-broad-v3-${{ github.run_id }}
+          name: bingx-broad-${{ matrix.tf }}-${{ github.run_id }}
           path: |
-            scan_5m.txt
-            scan_15m.txt
-            scan_1h.txt
-            filtered_5m.txt
-            filtered_15m.txt
-            filtered_1h.txt
+            scan_${{ matrix.tf }}.txt
+            filtered_${{ matrix.tf }}.txt
