@@ -1,5 +1,5 @@
 
-import os, math, time, requests, numpy as np, pandas as pd
+import os, math, time, random, requests, numpy as np, pandas as pd
 
 # ===== ENV / Secrets (mevcut isimlerle uyumlu) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN"); CHAT_ID = os.getenv("CHAT_ID")
@@ -26,9 +26,16 @@ RECENT_CONTAIN_MIN = float(os.getenv("RECENT_CONTAIN_MIN","0.70"))
 TOUCH_EPS_PCT = float(os.getenv("TOUCH_EPS_PCT","0.25"))
 GRID_COUNT = int(os.getenv("GRID_COUNT","12"))
 
+# ---- Bybit host list (opsiyonel override: BYBIT_HOSTS=host1,host2) ----
+HOSTS_ENV = os.getenv("BYBIT_HOSTS","").strip()
+if HOSTS_ENV:
+    BYBIT_HOSTS = [h.strip().rstrip('/') for h in HOSTS_ENV.split(',') if h.strip()]
+else:
+    BYBIT_HOSTS = ["https://api.bybit.com"]  # resmi ana domain
+
 assert BOT_TOKEN and CHAT_ID, "BOT_TOKEN/CHAT_ID gerekli."
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-HEADERS = {"Accept":"application/json","User-Agent":"grid-box-finder/1.0 (+github-actions)"}
+HEADERS = {"Accept":"application/json","User-Agent":"grid-box-finder/1.1 (+github-actions)"}
 
 def send(msg: str):
     try:
@@ -36,19 +43,41 @@ def send(msg: str):
     except requests.RequestException:
         pass
 
-def retry_get(url, params=None, tries=5, sleep=1.0):
+def _is_json_like(r):
+    ct = (r.headers.get("Content-Type") or "").lower()
+    if "application/json" in ct: return True
+    t = (r.text or "").lstrip()
+    return t.startswith("{") or t.startswith("[")
+
+def _safe_json(r):
+    if not (r.text and r.text.strip()):
+        raise ValueError("empty body")
+    if not _is_json_like(r):
+        raise ValueError("non-json body")
+    return r.json()
+
+def _try_hosts(path, params=None, tries=4, sleep=0.8):
     last=None
-    for i in range(tries):
-        try:
-            r=requests.get(url, params=params, headers=HEADERS, timeout=25)
-            if r.status_code>=500: time.sleep(sleep); continue
-            t=(r.text or "").strip()
-            if not t: time.sleep(sleep); continue
-            return r.json()
-        except Exception as e:
-            last=e; time.sleep(sleep); continue
+    for _ in range(tries):
+        for host in BYBIT_HOSTS:
+            url = host + path
+            try:
+                r = requests.get(url, params=params, headers=HEADERS, timeout=25)
+                if r.status_code >= 500:
+                    continue
+                j = _safe_json(r)
+                # Bybit v5 standard: retCode == 0 success
+                if isinstance(j, dict) and j.get("retCode", 0) != 0 and "retCode" in j:
+                    # non-success but json: try next host/try
+                    last = RuntimeError(f"bybit retCode {j.get('retCode')}")
+                    continue
+                return j
+            except Exception as e:
+                last = e
+                continue
+        time.sleep(sleep + random.random()*0.5)
     if last: raise last
-    raise RuntimeError("no response")
+    raise RuntimeError("bybit all hosts failed")
 
 # ---------- Bybit Market (linear USDT Perp) ----------
 def bybit_symbols_usdt_linear():
@@ -56,7 +85,7 @@ def bybit_symbols_usdt_linear():
     while True:
         params={"category":"linear"}
         if cursor: params["cursor"]=cursor
-        data=retry_get("https://api.bybit.com/v5/market/instruments-info", params=params)
+        data=_try_hosts("/v5/market/instruments-info", params=params)
         if data.get("retCode")!=0: break
         for it in data["result"]["list"]:
             if it.get("status")!="Trading": continue
@@ -68,7 +97,7 @@ def bybit_symbols_usdt_linear():
     return out
 
 def bybit_top_by_turnover(symbols, topn, volmin):
-    data=retry_get("https://api.bybit.com/v5/market/tickers", params={"category":"linear"})
+    data=_try_hosts("/v5/market/tickers", params={"category":"linear"})
     S=set(symbols); rows=[]
     for it in data["result"]["list"]:
         sym=it["symbol"]
@@ -89,14 +118,13 @@ def bars_for_hours(interval, hours):
     return min(max(need,60), 1000)
 
 def bybit_interval_token(interval):
-    # Bybit v5 kline interval: "1","3","5","15","30","60","120","240"
     mapping={"1m":"1","3m":"3","5m":"5","15m":"15","30m":"30","1h":"60","2h":"120","4h":"240"}
     return mapping.get(interval, "5")
 
 def klines_bybit(symbol, interval, hours):
     limit=bars_for_hours(interval, hours)
     p={"category":"linear","symbol":symbol,"interval":bybit_interval_token(interval),"limit":min(1000,limit)}
-    data=retry_get("https://api.bybit.com/v5/market/kline", params=p)
+    data=_try_hosts("/v5/market/kline", params=p)
     lst=data.get("result",{}).get("list",[])
     if not lst: return None
     lst.sort(key=lambda x: int(x[0]))  # oldest->newest
@@ -154,6 +182,13 @@ def analyze(symbol):
             "grid_low":float(lowL),"grid_mid":float(midL),"grid_high":float(highL)}
 
 def run():
+    # hızlı network test: server time
+    try:
+        _ = _try_hosts("/v5/market/time")
+    except Exception as e:
+        send(f"❌ Bybit network erişimi yok (Cloudflare/WAF olabilir): {e}")
+        raise
+
     syms=bybit_symbols_usdt_linear()
     pool=bybit_top_by_turnover(syms, MAX_SYMBOLS, VOL24_MIN_Q)
     if not pool:
