@@ -1,18 +1,52 @@
+# BingX Grid Scan Bot (GitHub Actions, ccxt tabanlı)
 
-# Pro Grid Box Finder — Regime + Activation (Dual Window)
+**Amaç:** BingX USDT-M Perpetual (swap) paritelerini **kamu verisi** ile tarayıp, 5 dakikalık mumlardan
+ATR ve bant genişliği metriklerine göre **nötr grid aralığı** önerisi üretir. **Gerçek emir göndermez.**
+İsterseniz Telegram’a özet gönderir.
 
-**Sorun:** Ping-pong rejimleri kısa sürüyor.  
-**Çözüm:** Uzun pencere ile **sürdürülebilir geniş bant**ı doğrula (**Regime**), kısa pencere ile **aktif ping‑pong**u yakala (**Activation**). Koşullar birlikte sağlanınca bildir.
+> ccxt kullanıyoruz. Bu sayede public endpoint uyumsuzlukları / rate limit farklarını daha az sorun ederek ilerleriz.
 
-## Secrets (önerilen)
-- MARKET=futures, INTERVAL=5m
-- LONG_HRS=96, RECENT_HRS=3
-- TOPK=12, QUOTE=USDT, MAX_SYMBOLS=150, VOL24_MIN_Q=50000000
-- LONG_RANGE_MIN_PCT=15.0, LONG_SLOPE_MAX_PCT=0.60, LONG_Q_LOW=0.10, LONG_Q_HIGH=0.90, LONG_CONTAIN_MIN=0.65
-- RECENT_ATR_MIN_PCT=0.60, RECENT_TOUCH_MIN=10, RECENT_ALT_MIN=6, RECENT_CONTAIN_MIN=0.70
-- TOUCH_EPS_PCT=0.25, GRID_COUNT=12
+## Hızlı Kurulum
+1. Bu klasörü *yeni bir GitHub reposuna* yükleyin (root’a).
+2. Repo → **Settings → Secrets and variables → Actions** altında (opsiyonel) şunları ekleyin:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+3. **Actions** sekmesinden workflow’u etkinleştirin.
+4. **Run workflow** ile hemen tetikleyebilirsiniz. Otomatik olarak her saat **:12**’de çalışır.
+5. Sonuçları **Actions → BingX Grid Scan → Logs** altında görün. Telegram verdiyseniz mesaj gelir.
 
-## Çalışma
-- **Regime (LONG_HRS)**: range%, slope%, inside% hesaplanır ve eşik kontrolü yapılır; grid bandı uzun pencereden türetilir.
-- **Activation (RECENT_HRS)**: ATR%, touches, alternations, inside% ile kısa süreli canlı ping‑pong teyit edilir.
-- Mesaj: ✅ işaretliler hem rejim hem aktivasyon sağlayanlardır; grid bandı ve metrikler birlikte verilir.
+## Dosya Yapısı
+```
+bingx-grid-scan-bot/
+├─ scan_bingx_grid.py
+├─ requirements.txt
+└─ .github/workflows/bingx-grid-scan.yml
+```
+
+## Çalışma Mantığı (varsayılanlar)
+- **Pazar:** BingX, `swap` (USDT-M perpetual)
+- **Sembol filtresi:** quote = USDT, `contract = True`
+- **Hacim sıralaması:** 24h notional volüme göre **ilk 15** (`TOP_K` ile değiştirilebilir)
+- **Zaman penceresi:** ~16 saat (200×5m)
+- **ATR periyodu:** 50
+- **Aday filtresi:** ATR% ≥ **0.3%**, range% ≥ **2%** (ENV ile ayarlanabilir)
+- **Öneri grid:** nötr; son fiyat merkez; genişlik **%2–%6** arası dinamik; **12 seviye**
+
+## Ortam Değişkenleri (opsiyonel)
+- `TOP_K` (int, varsayılan **15**)
+- `ATR_PCT_MIN` (float, varsayılan **0.003** → %0.3)
+- `RANGE_PCT_MIN` (float, varsayılan **0.02** → %2.0)
+
+## SSS
+**BingX API anahtarı gerekir mi?**  
+Hayır, bu tarayıcı yalnızca **kamu verisi** kullanır; ccxt ile public OHLCV/ticker çağrıları.
+
+**Windows’ta `chmod +x` veya shell script var mı?**  
+Yok. Python direkt çalıştırılıyor.
+
+**Telegram zorunlu mu?**  
+Değil. Secrets vermezsen, sadece log’a yazılır.
+
+---
+
+© 2025 – BingX grid tarama iskeleti (ccxt) – güvenli fallback’ler ile.
