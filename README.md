@@ -1,21 +1,26 @@
-# BingX Grid Scan Bot (GitHub Actions, ccxt tabanlı)
+# BingX Grid Scan Bot (GitHub Actions, ccxt) — **Ping‑Pong (S) sürümü**
 
-**Amaç:** BingX USDT-M Perpetual (swap) paritelerini **kamu verisi** ile tarayıp, 5 dakikalık mumlardan
-ATR ve bant genişliği metriklerine göre **nötr grid aralığı** önerisi üretir. **Gerçek emir göndermez.**
-İsterseniz Telegram’a özet gönderir.
+**Amaç:** BingX USDT‑M perpetual paritelerini **kamu verisi** ile tarayıp,
+- ATR% ve range% ile **grid’e elverişli** adayları bulur,
+- Ek olarak **“chop score”** (trend zayıflığı + orta bant geçişi + net drift) hesaplayarak **“PING‑PONG OK”** etiketiyle gerçekten **S davranışı** verenleri işaretler.
 
-> ccxt kullanıyoruz. Bu sayede public endpoint uyumsuzlukları / rate limit farklarını daha az sorun ederek ilerleriz.
+**Gerçek emir göndermez.** (İstersen ayrı bir `workflow_dispatch` ile paper/live modül ekleriz.)
 
 ## Hızlı Kurulum
-1. Bu klasörü *yeni bir GitHub reposuna* yükleyin (root’a).
-2. Repo → **Settings → Secrets and variables → Actions** altında (opsiyonel) şunları ekleyin:
-   - `TELEGRAM_BOT_TOKEN`
-   - `TELEGRAM_CHAT_ID`
-3. **Actions** sekmesinden workflow’u etkinleştirin.
-4. **Run workflow** ile hemen tetikleyebilirsiniz. Otomatik olarak her saat **:12**’de çalışır.
-5. Sonuçları **Actions → BingX Grid Scan → Logs** altında görün. Telegram verdiyseniz mesaj gelir.
+1) Bu klasörü *yeni bir GitHub reposuna* yükleyin.
+2) (Opsiyonel) **Settings → Secrets and variables → Actions** altında:
+   - **Secrets:** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+   - **Variables (önerilen başlangıç):**
+     - `TOP_K=60`
+     - `ATR_PCT_MIN=0.0025`  (≥%0.25)
+     - `RANGE_PCT_MIN=0.015` (≥%1.5)
+     - `ADX_MAX=18`          (trend zayıf)
+     - `MID_CROSS_MIN=12`    (16 saatte ≥12 orta bant geçişi)
+     - `DRIFT_MAX_RATIO=0.25`(net drift ≤ toplam range’in %25’i)
+3) **Actions**’ı etkinleştirip **Run workflow** ile çalıştırın (otomatik olarak her saat **:12**’de de çalışır).
+4) Sonuçları **Actions → BingX Grid Scan → Logs**’ta görün; Telegram secrets giriliyse özet mesaj gelir.
 
-## Dosya Yapısı
+## Dosyalar
 ```
 bingx-grid-scan-bot/
 ├─ scan_bingx_grid.py
@@ -23,30 +28,12 @@ bingx-grid-scan-bot/
 └─ .github/workflows/bingx-grid-scan.yml
 ```
 
-## Çalışma Mantığı (varsayılanlar)
-- **Pazar:** BingX, `swap` (USDT-M perpetual)
-- **Sembol filtresi:** quote = USDT, `contract = True`
-- **Hacim sıralaması:** 24h notional volüme göre **ilk 15** (`TOP_K` ile değiştirilebilir)
-- **Zaman penceresi:** ~16 saat (200×5m)
-- **ATR periyodu:** 50
-- **Aday filtresi:** ATR% ≥ **0.3%**, range% ≥ **2%** (ENV ile ayarlanabilir)
-- **Öneri grid:** nötr; son fiyat merkez; genişlik **%2–%6** arası dinamik; **12 seviye**
-
-## Ortam Değişkenleri (opsiyonel)
-- `TOP_K` (int, varsayılan **15**)
-- `ATR_PCT_MIN` (float, varsayılan **0.003** → %0.3)
-- `RANGE_PCT_MIN` (float, varsayılan **0.02** → %2.0)
-
-## SSS
-**BingX API anahtarı gerekir mi?**  
-Hayır, bu tarayıcı yalnızca **kamu verisi** kullanır; ccxt ile public OHLCV/ticker çağrıları.
-
-**Windows’ta `chmod +x` veya shell script var mı?**  
-Yok. Python direkt çalıştırılıyor.
-
-**Telegram zorunlu mu?**  
-Değil. Secrets vermezsen, sadece log’a yazılır.
+## Ne değişti? (Özet)
+- **ADX(14)** (TA‑Lib yok; saf Python) ile trend zayıflığı ölçümü (`ADX_MAX` eşiği).
+- **SMA(20) orta bant geçiş sayısı** (son ~16 saat içinde) `MID_CROSS_MIN` ile eşiklenir.
+- **Net drift**: son ~16 saatte ilk‑son kapanış farkının, toplam range’e oranı `DRIFT_MAX_RATIO` altında olmalı.
+- Bu üç şart **ATR%/range%** filtrelerine **ek** olarak sağlanırsa, aday **“PING‑PONG OK”** etiketi alır ve Telegram’da ayrı başlıkta listelenir.
 
 ---
 
-© 2025 – BingX grid tarama iskeleti (ccxt) – güvenli fallback’ler ile.
+© 2025 — BingX grid tarama (S‑davranışı ölçümleriyle).
