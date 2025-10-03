@@ -53,8 +53,10 @@ def main():
     import requests
     requests.post = _post  # type: ignore
     requests.get  = _get   # type: ignore
+    # Avoid asserts
     os.environ.setdefault("BOT_TOKEN", "0")
     os.environ.setdefault("CHAT_ID", "0")
+    # Forward args to the bot script
     sys.argv = ["auto_grid_box_finder_pro.py"] + sys.argv[1:]
     runpy.run_path("auto_grid_box_finder_pro.py", run_name="__main__")
 

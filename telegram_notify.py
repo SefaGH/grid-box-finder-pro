@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sys, re, json, urllib.request
-OKX_LINE = re.compile(r"OKX\s*▶\s*Lower=")
+import os, sys, json, urllib.request
 
 def send_message(token, chat_id, text):
     data = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
@@ -10,17 +9,30 @@ def send_message(token, chat_id, text):
     with urllib.request.urlopen(req, timeout=20) as resp:
         resp.read()
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3: sys.exit("usage: telegram_notify.py <filtered_file> <tf>")
-    path, tf = sys.argv[1], sys.argv[2]
-    token, chat_id = os.environ.get("BOT_TOKEN",""), os.environ.get("CHAT_ID","")
-    if not token or not chat_id: sys.exit(0)
+def load_nonempty_lines(path, limit=10):
     try:
-        txt = open(path, "r", encoding="utf-8", errors="ignore").read()
+        txt = open(path, "r", encoding="utf-8", errors="ignore").read().strip()
     except Exception:
+        return []
+    lines = [ln.strip() for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith("(") and "No parsable" not in ln]
+    return lines[:limit]
+
+if __name__ == "__main__":
+    # Accept multiple pairs: <file> <tf> [<file> <tf> ...]
+    token, chat_id = os.environ.get("BOT_TOKEN",""), os.environ.get("CHAT_ID","")
+    if not token or not chat_id:
         sys.exit(0)
-    lines = [ln.strip() for ln in txt.splitlines() if OKX_LINE.search(ln)]
-    if not lines: sys.exit(0)
-    preview = "\n".join(lines[:8])
-    send_message(token, chat_id, f"🧰 Grid Candidates — {tf}\n{preview}")
+    args = sys.argv[1:]
+    if len(args) < 2 or len(args) % 2 != 0:
+        sys.exit(0)
+    parts = []
+    for i in range(0, len(args), 2):
+        path, tf = args[i], args[i+1]
+        lines = load_nonempty_lines(path, 10)
+        if lines:
+            parts.append(f"⏱ {tf}\n" + "\n".join(lines))
+    if not parts:
+        sys.exit(0)
+    text = "🧰 Grid Candidates\n" + "\n\n".join(parts)
+    send_message(token, chat_id, text)
     print("Telegram sent.")
