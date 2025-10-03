@@ -1,30 +1,22 @@
-name: BingX Grid — Relaxed Scan (manual, v6)
+name: BingX Grid — Silent Scan + Single Notify (relaxed v2)
 
 on:
   workflow_dispatch:
 
-concurrency:
-  group: bingx-grid-relaxed
-  cancel-in-progress: true
-
-env:
-  PY_VERSION: "3.11"
-
-  MIN_RANGE: "1.0"
-  MAX_DRIFT: "0.40"
-  MAX_CV:   "0.60"
-  MIN_SCORE: "25"
-
-  FB_MIN_SCORE: "40"
-  FB_MAX_CV:    "0.60"
-  FB_MAX_DRIFT: "0.40"
-
 jobs:
-  scan-and-filter:
-    strategy:
-      matrix:
-        tf: ["5m","15m","1h"]
+  scan_and_filter:
     runs-on: ubuntu-latest
+    env:
+      PY_VERSION: "3.11"
+      MIN_RANGE: "1.0"
+      MAX_DRIFT: "0.40"
+      MAX_CV: "0.60"
+      MIN_SCORE: "25"
+      FB_MIN_SCORE: "40"
+      FB_MAX_CV: "0.60"
+      FB_MAX_DRIFT: "0.40"
+      BOT_TOKEN: "${{ secrets.BOT_TOKEN || '0' }}"
+      CHAT_ID:   "${{ secrets.CHAT_ID   || '0' }}"
 
     steps:
       - name: Checkout
@@ -35,40 +27,41 @@ jobs:
         with:
           python-version: ${{ env.PY_VERSION }}
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
+          python -m pip install -U pip wheel
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          chmod +x run_scan_muted_bingx.sh || true
 
-      - name: Run silent scan (${{ matrix.tf }})
-        env:
-          BOT_TOKEN: "0"
-          CHAT_ID:  "0"
-        run: ./run_scan_muted_bingx.sh ${{ matrix.tf }}
-
-      - name: Filter Wide Range Candidates (${{ matrix.tf }})
+      - name: Silent scan (capture Telegram → STDOUT)
         run: |
-          TF="${{ matrix.tf }}"
-          FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
-          echo "Using filter timeframe: $FTF (from TF=$TF)"
-          python grid_filter.py scan_${TF}.txt             --tf "$FTF"             --min-range $MIN_RANGE             --max-drift $MAX_DRIFT             --max-cv $MAX_CV             --min-score $MIN_SCORE             --fb-min-score $FB_MIN_SCORE             --fb-max-cv $FB_MAX_CV             --fb-max-drift $FB_MAX_DRIFT             --top 20             --print-okx | tee filtered_${TF}.txt
+          for TF in 5m 15m 1h; do
+            echo ">>> Running scan $TF"
+            python scan_capture.py --timeframe "$TF" | tee "scan_${TF}.txt"
+            echo ">>> PREVIEW scan_${TF}.txt (first 40 lines)"
+            sed -n '1,40p' "scan_${TF}.txt" || true
+          done
 
-      - name: Send Telegram (only if candidates) — ${{ matrix.tf }}
-        if: always()
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID:  ${{ secrets.CHAT_ID }}
+      - name: Filter results
         run: |
-          if grep -q "OKX ▶[[:space:]]*Lower=" "filtered_${{ matrix.tf }}.txt"; then
-            python telegram_notify.py "filtered_${{ matrix.tf }}.txt" "${{ matrix.tf }}"
-          else
-            echo "No candidates; no Telegram."
-          fi
+          for TF in 5m 15m 1h; do
+            FTF="$TF"; if [ "$TF" = "5m" ]; then FTF="3m"; fi
+            echo "Using filter timeframe: $FTF (from TF=$TF)"
+            python grid_filter.py "scan_${TF}.txt" --tf "$FTF"               --min-range "$MIN_RANGE" --max-drift "$MAX_DRIFT" --max-cv "$MAX_CV"               --min-score "$MIN_SCORE" --fb-min-score "$FB_MIN_SCORE"               --fb-max-cv "$FB_MAX_CV" --fb-max-drift "$FB_MAX_DRIFT"               --top 24 --print-okx | tee "filtered_${TF}.txt"
+          done
 
-      - name: Upload artifacts (${{ matrix.tf }})
+      - name: Telegram notify (only if we have lines)
+        if: ${{ env.BOT_TOKEN != '0' && env.CHAT_ID != '0' }}
+        run: |
+          python telegram_notify.py "filtered_5m.txt" 5m "filtered_15m.txt" 15m "filtered_1h.txt" 1h
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: bingx-grid-${{ matrix.tf }}-${{ github.run_id }}
+          name: bingx-relaxed-v2-${{ github.run_id }}
           path: |
-            scan_${{ matrix.tf }}.txt
-            filtered_${{ matrix.tf }}.txt
+            scan_5m.txt
+            scan_15m.txt
+            scan_1h.txt
+            filtered_5m.txt
+            filtered_15m.txt
+            filtered_1h.txt
