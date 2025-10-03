@@ -28,11 +28,14 @@ def env_int(name: str, default: int) -> int:
         return default
 
 TOP_K = env_int("TOP_K", 15)
-ATR_PCT_MIN = env_float("ATR_PCT_MIN", 0.003)      # 0.3%
-RANGE_PCT_MIN = env_float("RANGE_PCT_MIN", 0.02)   # 2%
-ADX_MAX = env_float("ADX_MAX", 18.0)               # trend zayıflığı eşiği
-MID_CROSS_MIN = env_int("MID_CROSS_MIN", 12)       # orta bant geçiş sayısı
-DRIFT_MAX_RATIO = env_float("DRIFT_MAX_RATIO", 0.25)# net drift üst sınırı
+ATR_PCT_MIN = env_float("ATR_PCT_MIN", 0.003)        # 0.3%
+RANGE_PCT_MIN = env_float("RANGE_PCT_MIN", 0.02)     # 2%
+ADX_MAX = env_float("ADX_MAX", 18.0)                 # trend zayıflığı eşiği
+MID_CROSS_MIN = env_int("MID_CROSS_MIN", 12)         # orta bant geçiş sayısı
+DRIFT_MAX_RATIO = env_float("DRIFT_MAX_RATIO", 0.25) # net drift üst sınırı
+MIN_QVOL_USDT = env_float("MIN_QVOL_USDT", 0.0)      # 0 → kapalı
+LISTED_MIN_DAYS = env_int("LISTED_MIN_DAYS", 0)      # 0 → kapalı
+MIN_GRID_K_ATR = env_float("MIN_GRID_K_ATR", 0.0)    # 0 → kapalı
 
 # ---------- BASIC METRICS ----------
 def pct(x: float) -> str:
@@ -144,6 +147,9 @@ def suggest_grid(last: float, atr_abs: float) -> Tuple[float,float,int]:
         return (last, last, 12)
     atr_pct = atr_abs / last if last else 0.0
     width_pct = max(0.02, min(0.06, atr_pct * 6.0))
+    # Opsiyonel: grid genişliği en az k×ATR olsun
+    min_pct_by_atr = (MIN_GRID_K_ATR * atr_abs / last) if MIN_GRID_K_ATR > 0 and last > 0 else 0.0
+    width_pct = max(width_pct, min_pct_by_atr)
     half = last * width_pct / 2.0
     return (last - half, last + half, 12)
 
@@ -162,17 +168,59 @@ def send_telegram(msg: str) -> None:
     except Exception as e:
         print(f"[warn] Telegram gönderim istisnası: {e}")
 
+def human_tags(tags: List[str]) -> str:
+    return "".join([f"[{t}]" for t in tags])
+
 def to_human(d: Dict[str, Any]) -> str:
     tag = " [PING-PONG OK]" if d.get("pingpong_ok") else ""
+    why = human_tags(d.get("why_tags", []))
     return (
         f"{d['symbol']}: last={d['last']:.6g} | ATR={d['atr_abs']:.6g} ({pct(d['atr_pct'])}) | "
         f"range≈{pct(d['range_pct'])} | ADX≈{d.get('adx', float('nan')):.1f} | "
-        f"mid-cross={d.get('midcross', 0)} | drift%≈{pct(d.get('drift_ratio', 0.0))}{tag} | "
+        f"mid-cross={d.get('midcross', 0)} | drift%≈{pct(d.get('drift_ratio', 0.0))}{tag}{(' ' + why) if why else ''} | "
         f"grid≈[{d['grid_lower']:.6g} … {d['grid_upper']:.6g}] × {d['levels']}"
     )
 
+# ---------- LIQUIDITY & LISTING AGE ----------
+def ticker_quote_usdt(tk: Dict[str, Any]) -> float:
+    qv = tk.get("quoteVolume")
+    if qv is not None:
+        try:
+            return float(qv)
+        except Exception:
+            pass
+    last = tk.get("last") or tk.get("close") or 0.0
+    base = tk.get("baseVolume") or 0.0
+    try:
+        return float(last) * float(base)
+    except Exception:
+        return 0.0
+
+def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]) -> float:
+    # 1) market.info üzerinde zaman alanı varsa kullan
+    info = market_info.get("info", {}) if isinstance(market_info, dict) else {}
+    for key in ("listingTime", "createTime", "listTime", "onboardDate", "launchTime", "created"):
+        if key in info:
+            try:
+                ts = int(info[key])
+                if ts > 1e12:  # micro/nano?
+                    while ts > 1e13:
+                        ts //= 10
+                if ts < 1e11:
+                    ts *= 1000
+                now_ms = exchange.milliseconds()
+                return (now_ms - ts) / (1000*60*60*24)
+            except Exception:
+                continue
+    # 2) fallback: 1h OHLCV uzunluğu ile kaba yaş
+    try:
+        bars = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=500)
+        return (len(bars) / 24.0)  # min tahmin
+    except Exception:
+        return -1.0  # bilinmiyor
+
 def main():
-    print("== BingX Grid Scan (public via ccxt) — Ping-Pong mode ==")
+    print("== BingX Grid Scan (public via ccxt) — Ping-Pong Pro ==")
     ex = ccxt.bingx({
         "enableRateLimit": ENABLE_RATE_LIMIT,
         "options": {"defaultType": "swap"},
@@ -210,6 +258,9 @@ def main():
     results = []
     for sym, tk in pairs:
         try:
+            qvol = ticker_quote_usdt(tk)
+            liq_ok = (qvol >= MIN_QVOL_USDT) if MIN_QVOL_USDT > 0 else True
+
             ohlcv = ex.fetch_ohlcv(sym, timeframe="5m", limit=200)  # ~16h
             if not ohlcv or len(ohlcv) < 60:
                 print("SKIP (yetersiz OHLCV) ", sym)
@@ -229,11 +280,40 @@ def main():
             total_range = (max(window) - min(window)) if window else 0.0
             drift = abs(closes[-1] - closes[0])
             drift_ratio = (drift / total_range) if total_range > 0 else 0.0
+
+            # listing age (yalnızca base_ok sonrası pahalı çağrı yapalım)
+            atr_pct = (atr50 / last) if last > 0 else 0.0
+            base_ok = (atr_pct >= ATR_PCT_MIN and rng >= RANGE_PCT_MIN and liq_ok)
+            age_ok = True
+            if base_ok and LISTED_MIN_DAYS > 0:
+                days = estimate_listing_age_days(ex, sym, markets.get(sym, {}))
+                age_ok = (days < 0) or (days >= LISTED_MIN_DAYS)  # bilinmiyorsa es geç, varsa uygula
+
+            # S filtresi
+            pingpong_ok = (base_ok and age_ok and (adx_val <= ADX_MAX) and (midcross >= MID_CROSS_MIN) and (drift_ratio <= DRIFT_MAX_RATIO))
+
+            # neden etiketleri
+            why = []
+            if atr_pct < ATR_PCT_MIN:
+                why.append("LOWVOL")
+            if rng < RANGE_PCT_MIN:
+                why.append("LOWRANGE")
+            if not liq_ok:
+                why.append("LOWLIQ")
+            if LISTED_MIN_DAYS > 0 and base_ok and not age_ok:
+                why.append("NEW")
+            if adx_val > ADX_MAX:
+                why.append("TREND")
+            if midcross < MID_CROSS_MIN:
+                why.append("MID")
+            if drift_ratio > DRIFT_MAX_RATIO:
+                why.append("DRIFT")
+
             d = {
                 "symbol": sym,
                 "last": last,
                 "atr_abs": atr50,
-                "atr_pct": (atr50 / last) if last>0 else 0.0,
+                "atr_pct": atr_pct,
                 "range_pct": rng,
                 "grid_lower": lower,
                 "grid_upper": upper,
@@ -241,18 +321,19 @@ def main():
                 "adx": adx_val,
                 "midcross": midcross,
                 "drift_ratio": drift_ratio,
+                "pingpong_ok": pingpong_ok,
+                "why_tags": why if (base_ok and not pingpong_ok) else ([] if pingpong_ok else why),
             }
-            base_ok = (d["atr_pct"] >= ATR_PCT_MIN and d["range_pct"] >= RANGE_PCT_MIN)
-            pingpong_ok = base_ok and (adx_val <= ADX_MAX) and (midcross >= MID_CROSS_MIN) and (drift_ratio <= DRIFT_MAX_RATIO)
-            d["pingpong_ok"] = pingpong_ok
+
             if base_ok:
                 results.append(d)
                 print("OK  ", to_human(d))
             else:
                 print("SKIP", to_human(d))
+
             if pingpong_ok:
                 pp_candidates.append(d)
-            time.sleep(0.35)
+            time.sleep(0.32)
         except ccxt.NetworkError as e:
             print("NETERR", sym, e)
             time.sleep(0.3)
@@ -266,7 +347,7 @@ def main():
     lines = [to_human(d) for d in results[:12]]
     body = header + ("\n".join(lines) if lines else "(Aday bulunamadı)")
 
-    # Telegram mesajını iki blok halinde gönder: önce PING-PONG, sonra genel
+    # Telegram: önce PING-PONG, sonra genel
     if pp_candidates:
         pp_sorted = sorted(pp_candidates, key=lambda x: x["atr_pct"] * x["range_pct"], reverse=True)[:8]
         pp_header = "PING-PONG OK (S davranışı teyitli)\n"
