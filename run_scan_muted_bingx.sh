@@ -6,7 +6,7 @@ OUT="scan_${TF}.txt"
 
 run_cmd() {
   local extra="$1"
-  BOT_TOKEN="0" CHAT_ID="0" python auto_grid_box_finder_pro.py --timeframe "$TF" $extra 2>&1 | tee -a "$OUT"
+  python scan_capture.py --timeframe "$TF" $extra 2>&1 | tee -a "$OUT"
 }
 
 echo ">>> Silent scan TF=$TF" | tee -a "$OUT"
@@ -26,5 +26,8 @@ for H in 6 12 24; do
   echo "----- attempt: activation=${H}h -----" | tee -a "$OUT"
   run_cmd "--activation-hours ${H}" || true
 done
+
+echo "----- attempt: ONLY S-GRID -----" | tee -a "$OUT"
+run_cmd "--only-s-grid" || true
 
 echo ">>> Done."
