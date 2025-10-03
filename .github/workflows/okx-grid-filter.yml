@@ -1,0 +1,66 @@
+name: OKX Grid — Scan & Filter
+
+on:
+  workflow_dispatch:   # Manual trigger
+  schedule:            # Automatic: every 15 minutes (UTC)
+    - cron: "*/15 * * * *"
+
+env:
+  PY_VERSION: "3.11"
+  # Thresholds for primary filter (wide range + stable)
+  MIN_RANGE: "2.5"     # Lrng % (e.g., 2.5 means >= 2.5% long-range)
+  MAX_DRIFT: "0.20"    # d %
+  MAX_CV: "0.35"
+  MIN_SCORE: "45"
+  # Fallback thresholds (tight but machine-like)
+  FB_MIN_SCORE: "50"
+  FB_MAX_CV: "0.40"
+  FB_MAX_DRIFT: "0.30"
+
+jobs:
+  scan-and-filter:
+    strategy:
+      matrix:
+        tf: ["15m", "1h"]   # Add "3m" here if you also want the fast scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+
+      - name: Install dependencies (if any)
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            python -V
+          fi
+
+      # 1) SCAN: run your scanner and capture output to a file
+      - name: Run scan (${{ matrix.tf }})
+        shell: bash
+        run: |
+          set -e
+          python auto_grid_box_finder_pro.py --timeframe ${{ matrix.tf }} | tee scan_${{ matrix.tf }}.txt
+          echo "Scan lines: $(wc -l < scan_${{ matrix.tf }}.txt)"
+
+      # 2) FILTER: apply grid_filter.py to surface candidates + OKX-ready params
+      - name: Filter Wide Range Candidates (${{ matrix.tf }})
+        shell: bash
+        run: |
+          set -e
+          python grid_filter.py scan_${{ matrix.tf }}.txt                 --tf ${{ matrix.tf }}                 --min-range $MIN_RANGE                 --max-drift $MAX_DRIFT                 --max-cv $MAX_CV                 --min-score $MIN_SCORE                 --fb-min-score $FB_MIN_SCORE                 --fb-max-cv $FB_MAX_CV                 --fb-max-drift $FB_MAX_DRIFT                 --top 12                 --print-okx | tee filtered_${{ matrix.tf }}.txt
+
+      # 3) ARTIFACTS: download-ready files (scan + filtered result)
+      - name: Upload artifacts (${{ matrix.tf }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: okx-grid-${{ matrix.tf }}-${{ github.run_id }}
+          path: |
+            scan_${{ matrix.tf }}.txt
+            filtered_${{ matrix.tf }}.txt
