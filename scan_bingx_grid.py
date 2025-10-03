@@ -45,7 +45,7 @@ MIN_GRID_K_ATR = _env_float("MIN_GRID_K_ATR", 1.0)
 
 # Fast S controls (1m diagnostics)
 FAST_S_MODE = _env_int("FAST_S_MODE", 1)               # 1=on, 0=off
-FAST_TF = _env_str("FAST_TF", "1m")
+FAST_TF = _env_str("FAST_TF", "1m").strip('"\'')
 FAST_LIMIT = _env_int("FAST_LIMIT", 360)               # ~6h in 1m
 MIN_CROSSES_PER_HOUR = _env_float("MIN_CROSSES_PER_HOUR", 10)
 CYCLE_MIN_MIN = _env_float("CYCLE_MIN_MIN", 5)
