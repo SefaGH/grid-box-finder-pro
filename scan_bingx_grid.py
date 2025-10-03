@@ -45,9 +45,10 @@ MIN_GRID_K_ATR = _env_float("MIN_GRID_K_ATR", 1.0)
 
 # Fast S controls (1m diagnostics)
 FAST_S_MODE = _env_int("FAST_S_MODE", 1)               # 1=on, 0=off
-FAST_TF = _env_str("FAST_TF", "1m").strip('"\'')
+FAST_TF = _env_str("FAST_TF", "1m")
+FAST_TF = FAST_TF.replace('"','').replace("'","")
 if FAST_TF not in ("1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"):
-    FAST_TF = "1m")
+    FAST_TF = "1m"
 FAST_LIMIT = _env_int("FAST_LIMIT", 360)               # ~6h in 1m
 MIN_CROSSES_PER_HOUR = _env_float("MIN_CROSSES_PER_HOUR", 10)
 CYCLE_MIN_MIN = _env_float("CYCLE_MIN_MIN", 5)
@@ -181,7 +182,7 @@ def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
     cross_idx = []
     prev_diff = None
     for i, (c, m) in enumerate(zip(closes, mid)):
-        if m != m:  # NaN (ilk 19 bar)
+        if m != m:  # NaN (first 19 bars)
             continue
         diff = c - m
         if prev_diff is not None:
@@ -189,14 +190,23 @@ def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
                 cross_idx.append(i)
         prev_diff = diff
 
+    # Exclude warmup (~20 bars) from the duration
+    warmup = 19
+    effective_len = max(len(closes) - warmup, 1)
+    hours = max(effective_len / 60.0, 1e-6)
+
+    # 1) count-based rate
+    count_rate = len(cross_idx) / hours
+
+    # 2) rate derived from median interval (more robust)
     intervals = [(cross_idx[i] - cross_idx[i - 1]) for i in range(1, len(cross_idx))]
-    hours = max(len(closes) / 60.0, 1e-6)
-    crosses_h = len(cross_idx) / hours
     if not intervals:
-        return crosses_h, float("inf")
+        return count_rate, float('inf')
     intervals.sort()
-    med = intervals[len(intervals) // 2]  # bars in minutes (1 bar = 1 min on 1m tf)
-    return crosses_h, float(med)
+    med = float(intervals[len(intervals) // 2])  # bars in minutes (1 bar = 1 min on 1m tf)
+    rate_from_med = (60.0 / med) if (med > 0 and math.isfinite(med)) else 0.0
+
+    return max(count_rate, rate_from_med), med
 
 
 def suggest_grid(last: float, atr_abs: float) -> Tuple[float, float, int]:
