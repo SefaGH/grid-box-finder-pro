@@ -1,34 +1,46 @@
 
-import os, math, time, requests, numpy as np, pandas as pd
+import os, math, time, statistics
+import numpy as np, pandas as pd, requests
 
-# ===== ENV / Secrets (mevcut isimlerle uyumlu) =====
+# ===== ENV / Secrets (mevcut isimlerle uyumlu; ekstra S-Pattern eşikleri opsiyonel) =====
 BOT_TOKEN = os.getenv("BOT_TOKEN"); CHAT_ID = os.getenv("CHAT_ID")
-INTERVAL = os.getenv("INTERVAL","5m").strip()                # OKX bars: 1m/3m/5m/15m/30m/1H/2H/4H
-LONG_HRS = float(os.getenv("LONG_HRS","96"))
-RECENT_HRS = float(os.getenv("RECENT_HRS","3"))
+
+# Genel
+INTERVAL = os.getenv("INTERVAL","5m").strip()                # 1m/3m/5m/15m/30m/1h
+LONG_HRS = float(os.getenv("LONG_HRS","96"))                 # rejim penceresi
+RECENT_HRS = float(os.getenv("RECENT_HRS","3"))              # aktivasyon penceresi
 TOPK = int(os.getenv("TOPK","12"))
 QUOTE = os.getenv("QUOTE","USDT").strip().upper()
 MAX_SYMBOLS = int(os.getenv("MAX_SYMBOLS","150"))
-VOL24_MIN_Q = float(os.getenv("VOL24_MIN_Q","30000000"))     # 24h quote turnover (USDT) min
+VOL24_MIN_Q = float(os.getenv("VOL24_MIN_Q","30000000"))     # 24h quote turnover min
 
-# Regime (long)
+# Rejim (uzun)
 LONG_RANGE_MIN_PCT = float(os.getenv("LONG_RANGE_MIN_PCT","15.0"))
 LONG_SLOPE_MAX_PCT = float(os.getenv("LONG_SLOPE_MAX_PCT","0.60"))
 LONG_Q_LOW = float(os.getenv("LONG_Q_LOW","0.10"))
 LONG_Q_HIGH = float(os.getenv("LONG_Q_HIGH","0.90"))
 LONG_CONTAIN_MIN = float(os.getenv("LONG_CONTAIN_MIN","0.65"))
 
-# Activation (recent)
+# Aktivasyon (kısa) – temel
 RECENT_ATR_MIN_PCT = float(os.getenv("RECENT_ATR_MIN_PCT","0.60"))
 RECENT_TOUCH_MIN = int(os.getenv("RECENT_TOUCH_MIN","10"))
 RECENT_ALT_MIN = int(os.getenv("RECENT_ALT_MIN","6"))
 RECENT_CONTAIN_MIN = float(os.getenv("RECENT_CONTAIN_MIN","0.70"))
 TOUCH_EPS_PCT = float(os.getenv("TOUCH_EPS_PCT","0.25"))
+
+# Grid önerisi
 GRID_COUNT = int(os.getenv("GRID_COUNT","12"))
+
+# --- S-Pattern Özel Eşikler (opsiyonel; boşsa varsayılanlar kullanılır) ---
+S_ALT_RATIO_MIN = float(os.getenv("S_ALT_RATIO_MIN","0.60"))      # alternation_ratio >=
+S_TOUCH_BAL_MAX = float(os.getenv("S_TOUCH_BAL_MAX","0.30"))      # |top-bottom|/touches <=
+S_ATR_CV_MAX    = float(os.getenv("S_ATR_CV_MAX","0.35"))         # recent ATR CV <=
+S_DRIFT_MAX_PCT = float(os.getenv("S_DRIFT_MAX_PCT","0.35"))      # recent slope <=
+S_INSIDE_REC_MIN= float(os.getenv("S_INSIDE_REC_MIN","0.72"))     # recent inside >=
 
 assert BOT_TOKEN and CHAT_ID, "BOT_TOKEN/CHAT_ID gerekli."
 TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-HEADERS = {"Accept":"application/json","User-Agent":"grid-box-finder/1.1 (+github-actions)"}
+HEADERS = {"Accept":"application/json","User-Agent":"grid-box-finder/okx-s-pattern/1.0 (+github-actions)"}
 
 def send(msg: str):
     try:
@@ -41,12 +53,11 @@ def okx_get(path, params=None, tries=5, sleep=0.8):
     for _ in range(tries):
         try:
             r=requests.get("https://www.okx.com"+path, params=params, headers=HEADERS, timeout=25)
-            if r.status_code>=500:
-                time.sleep(sleep); continue
+            if r.status_code>=500: time.sleep(sleep); continue
             t=(r.text or "").strip()
             if not t: time.sleep(sleep); continue
             j=r.json()
-            if j.get("code") not in ("0", 0):  # non-success
+            if j.get("code") not in ("0", 0):  # error
                 last=RuntimeError(f"okx code {j.get('code')} msg {j.get('msg')}")
                 time.sleep(sleep); continue
             return j
@@ -57,25 +68,21 @@ def okx_get(path, params=None, tries=5, sleep=0.8):
 
 # ---------- OKX Market (USDT-margined perpetual swaps) ----------
 def okx_symbols_usdt_swap():
-    # instType=SWAP, uly like "BTC-USDT-SWAP". We'll filter quote currency USDT.
     out=[]
     data=okx_get("/api/v5/public/instruments", params={"instType":"SWAP"})
     for it in data["data"]:
         instId=it.get("instId","")
-        # USDT margined perpetual typically ends with "-USDT-SWAP"
         if instId.endswith("-USDT-SWAP"):
             out.append(instId)
     return out
 
 def okx_top_by_turnover(symbols, topn, volmin):
-    # We'll map using 24h tickers; OKX: /api/v5/market/tickers?instType=SWAP
     data=okx_get("/api/v5/market/tickers", params={"instType":"SWAP"})
     S=set(symbols); rows=[]
     for it in data["data"]:
         instId=it.get("instId")
         if instId not in S: continue
         try:
-            # 24h turnover in quote currency
             q=float(it.get("volCcy24h","0"))
             last=float(it.get("last","0"))
         except Exception:
@@ -97,17 +104,17 @@ def okx_bar(interval):
 
 def klines_okx(instId, interval, hours):
     limit=bars_for_hours(interval, hours)
-    params={"instId":instId,"bar":okx_bar(interval),"limit":min(100,limit)}  # OKX typically returns up to 100 per call; loop if needed
+    params={"instId":instId,"bar":okx_bar(interval),"limit":min(100,limit)}
     data=okx_get("/api/v5/market/candles", params=params)
     lst=data.get("data",[])
     if not lst: return None
-    # OKX returns newest first
     lst.sort(key=lambda x:int(x[0]))
     h=np.array([float(x[2]) for x in lst])
     l=np.array([float(x[3]) for x in lst])
     c=np.array([float(x[4]) for x in lst])
     return h,l,c
 
+# ---------- İstatistik ----------
 def slope_pct(closes):
     y=closes; x=np.arange(len(y)); x=x-x.mean()
     m=np.polyfit(x,y,1)[0]; drift=m*(len(y)/2.0)
@@ -126,39 +133,105 @@ def band_features(closes, q_low, q_high, eps_pct):
     top=(closes>=eps_top).astype(int); bot=(closes<=eps_bot).astype(int)
     touches=int(top.sum()+bot.sum())
     seq=[1 if t and not b else (-1 if b and not t else 0) for t,b in zip(top,bot)]
-    seq=[s for s in seq if s!=0]; alts=sum(1 for i in range(1,len(seq)) if seq[i]!=seq[i-1])
+    seq=[s for s in seq if s!=0]
+    alts=sum(1 for i in range(1,len(seq)) if seq[i]!=seq[i-1])
     rng=(closes.max()-closes.min())/max(np.median(closes),1e-12)*100.0
-    return low,mid,high,inside,touches,alts,rng
+    # üst-alt denge
+    top_cnt=int(top.sum()); bot_cnt=int(bot.sum())
+    return low,mid,high,inside,touches,alts,rng, top_cnt, bot_cnt
+
+def atr_cv(closes, segment=20):
+    """ATR yerine TR tabanlı oynaklık sabitliği ~ segment bazlı std/mean (CV)."""
+    c=closes
+    prev=np.r_[c[0],c[:-1]]
+    tr=np.abs(c-prev)
+    # son N*segment barı segmentlere böl
+    N=len(tr)//segment
+    if N<3:
+        return 1.0
+    chunks = [tr[i*segment:(i+1)*segment].mean() for i in range(N)]
+    mu = sum(chunks)/len(chunks)
+    sd = (sum((x-mu)**2 for x in chunks)/max(len(chunks)-1,1))**0.5
+    return float(sd/(mu+1e-12))
+
+def s_pattern_metrics(closes, q_low=0.2, q_high=0.8, eps_pct=0.3):
+    low,mid,high,inside,touches,alts,_, top_cnt, bot_cnt = band_features(closes,q_low,q_high,eps_pct)
+    if touches<=1:
+        alt_ratio=0.0
+    else:
+        alt_ratio = alts/float(max(touches-1,1))
+    # üst/alt denge: |top - bot| / touches
+    if touches==0:
+        touch_bal = 1.0
+    else:
+        touch_bal = abs(top_cnt - bot_cnt)/float(touches)
+    # drift (kısa pencere)
+    drift = slope_pct(closes)
+    # ATR sabitliği (CV)
+    cv = atr_cv(closes, segment=20)
+    return {
+        "inside": inside,
+        "touches": touches,
+        "alts": alts,
+        "alt_ratio": alt_ratio,
+        "touch_bal": touch_bal,
+        "drift": drift,
+        "atr_cv": cv,
+        "band_low": low,
+        "band_mid": mid,
+        "band_high": high
+    }
 
 def analyze(instId):
-    long=klines_okx(instId, INTERVAL, LONG_HRS)
+    # Rejim (uzun)
+    long = klines_okx(instId, INTERVAL, LONG_HRS)
     if not long: return None
-    hL,lL,cL=long
-    lowL,midL,highL,insideL,touchL,altL,rangeL=band_features(cL,LONG_Q_LOW,LONG_Q_HIGH,TOUCH_EPS_PCT)
-    slopeL=slope_pct(cL)
-    ok_regime=(rangeL>=LONG_RANGE_MIN_PCT) and (slopeL<=LONG_SLOPE_MAX_PCT) and (insideL>=LONG_CONTAIN_MIN)
+    hL,lL,cL = long
+    lowL,midL,highL,insideL,touchL,altL,rangeL,_,_ = band_features(cL,LONG_Q_LOW,LONG_Q_HIGH,TOUCH_EPS_PCT)
+    slopeL = slope_pct(cL)
+    ok_regime = (rangeL>=LONG_RANGE_MIN_PCT) and (slopeL<=LONG_SLOPE_MAX_PCT) and (insideL>=LONG_CONTAIN_MIN)
 
-    rec=klines_okx(instId, INTERVAL, RECENT_HRS)
+    # Aktivasyon (kısa) + S-pattern
+    rec = klines_okx(instId, INTERVAL, RECENT_HRS)
     if not rec: return None
-    hS,lS,cS=rec
-    lowS,midS,highS,insideS,touchS,altS,rangeS=band_features(cS,0.15,0.85,TOUCH_EPS_PCT)
-    slopeS=slope_pct(cS); atrS=atr_pct(hS,lS,cS,period=14)
-    ok_act=(insideS>=RECENT_CONTAIN_MIN) and (atrS>=RECENT_ATR_MIN_PCT) and (touchS>=RECENT_TOUCH_MIN) and (altS>=RECENT_ALT_MIN)
+    hS,lS,cS = rec
+    # temel
+    lowS,midS,highS,insideS,touchS,altS,rangeS,topS,botS = band_features(cS,0.15,0.85,TOUCH_EPS_PCT)
+    slopeS = slope_pct(cS); atrS = atr_pct(hS,lS,cS,period=14)
+    ok_activation = (insideS>=RECENT_CONTAIN_MIN) and (atrS>=RECENT_ATR_MIN_PCT) and (touchS>=RECENT_TOUCH_MIN) and (altS>=RECENT_ALT_MIN)
 
-    score=(0.4*rangeL + 0.2*insideL*100 + 0.1*touchL + 0.1*altL - 0.3*slopeL
-           + 0.3*atrS + 0.2*touchS + 0.2*altS + 0.2*insideS*100 - 0.3*slopeS)
+    # s-pattern
+    sp = s_pattern_metrics(cS, q_low=0.2, q_high=0.8, eps_pct=TOUCH_EPS_PCT)
+    ok_s = (sp["alt_ratio"]>=S_ALT_RATIO_MIN) and (sp["touch_bal"]<=S_TOUCH_BAL_MAX) \
+           and (sp["atr_cv"]<=S_ATR_CV_MAX) and (sp["drift"]<=S_DRIFT_MAX_PCT) \
+           and (sp["inside"]>=S_INSIDE_REC_MIN)
 
-    return {"symbol":instId,"regime":ok_regime,"activation":ok_act,"score":float(score),
-            "long_range":float(rangeL),"long_inside":float(insideL),"long_slope":float(slopeL),
-            "recent_inside":float(insideS),"recent_touch":int(touchS),"recent_alt":int(altS),
-            "recent_atr":float(atrS),"recent_slope":float(slopeS),
-            "grid_low":float(lowL),"grid_mid":float(midL),"grid_high":float(highL)}
+    # skor: S-pattern bonusları
+    score = (0.35*rangeL + 0.15*insideL*100 - 0.25*slopeL
+             + 0.25*atrS + 0.20*touchS + 0.20*altS + 0.20*insideS*100 - 0.25*slopeS
+             + 10.0*sp["alt_ratio"] - 8.0*sp["touch_bal"] + 6.0*(1.0 - min(sp["atr_cv"],1.0))
+             + 4.0*(sp["inside"]))
+
+    tag = "✅ S-GRID" if (ok_regime and ok_activation and ok_s) else ("⚠️ NEAR" if (ok_regime and ok_s) else "—")
+
+    return {
+        "symbol":instId, "regime":ok_regime, "activation":ok_activation, "s_ok":ok_s, "tag":tag,
+        "score":float(score),
+        "long_range":float(rangeL), "long_inside":float(insideL), "long_slope":float(slopeL),
+        "recent_inside":float(insideS), "recent_touch":int(touchS), "recent_alt":int(altS),
+        "recent_atr":float(atrS), "recent_slope":float(slopeS),
+        "grid_low":float(lowL), "grid_mid":float(midL), "grid_high":float(highL),
+        "s_alt_ratio":float(sp["alt_ratio"]), "s_touch_bal":float(sp["touch_bal"]),
+        "s_atr_cv":float(sp["atr_cv"]), "s_drift":float(sp["drift"])
+    }
 
 def run():
-    syms=okx_symbols_usdt_swap()
-    pool=okx_top_by_turnover(syms, MAX_SYMBOLS, VOL24_MIN_Q)
+    # evren
+    syms = okx_symbols_usdt_swap()
+    pool = okx_top_by_turnover(syms, MAX_SYMBOLS, VOL24_MIN_Q)
     if not pool:
         send("⚠️ Pro Grid Finder (OKX): evrende sembol yok."); return
+
     rows=[]
     for s in pool:
         try:
@@ -166,22 +239,30 @@ def run():
             if d: rows.append(d)
         except Exception:
             pass
+
     if not rows:
         send("⚠️ Pro Grid Finder (OKX): veri toplanamadı."); return
 
-    picks=[r for r in rows if r["regime"] and r["activation"]]
-    picks.sort(key=lambda x:x["score"], reverse=True)
-    top=picks[:TOPK] if picks else rows[:TOPK]
+    # sadece S-GRID adayları öncelikli
+    sgrid = [r for r in rows if r["tag"]=="✅ S-GRID"]
+    near  = [r for r in rows if r["tag"]=="⚠️ NEAR"]
+    sgrid.sort(key=lambda x:x["score"], reverse=True)
+    near.sort(key=lambda x:x["score"], reverse=True)
 
-    hdr=(f"🧰 Pro Grid Box Finder — OKX (USDT swap) — {INTERVAL} | Regime {int(LONG_HRS)}h + Activation {int(RECENT_HRS)}h\n"
+    picks = (sgrid + near)[:TOPK] if (sgrid or near) else sorted(rows, key=lambda x:x["score"], reverse=True)[:TOPK]
+
+    hdr=(f"🧰 Pro Grid Box Finder — OKX (USDT swap) — {INTERVAL} | Regime {int(LONG_HRS)}h + Activation {int(RECENT_HRS)}h + S-Pattern\n"
          f"Regime: range≥{LONG_RANGE_MIN_PCT}%, slope≤{LONG_SLOPE_MAX_PCT}%, inside≥{LONG_CONTAIN_MIN} | "
-         f"Activation: ATR≥{RECENT_ATR_MIN_PCT}%, touches≥{RECENT_TOUCH_MIN}, alt≥{RECENT_ALT_MIN}, inside≥{RECENT_CONTAIN_MIN}")
+         f"Act: ATR≥{RECENT_ATR_MIN_PCT}%, touches≥{RECENT_TOUCH_MIN}, alt≥{RECENT_ALT_MIN}, inside≥{RECENT_CONTAIN_MIN} | "
+         f"S: alt_ratio≥{S_ALT_RATIO_MIN}, touch_bal≤{S_TOUCH_BAL_MAX}, atr_cv≤{S_ATR_CV_MAX}, drift≤{S_DRIFT_MAX_PCT}, inside≥{S_INSIDE_REC_MIN}")
+
     lines=[]
-    for r in top:
-        tag="✅" if r["regime"] and r["activation"] else "—"
-        lines.append(f"{tag} {r['symbol']:<16} | Lrng {r['long_range']:.1f}% Lins {r['long_inside']*100:.0f}% Lsl {r['long_slope']:.2f}% | "
+    for r in picks:
+        lines.append(f"{r['tag']} {r['symbol']:<16} | Lrng {r['long_range']:.1f}% Lins {r['long_inside']*100:.0f}% Lsl {r['long_slope']:.2f}% | "
                      f"Ratr {r['recent_atr']:.2f}% Rins {r['recent_inside']*100:.0f}% Rsl {r['recent_slope']:.2f}% "
-                     f"T{r['recent_touch']} A{r['recent_alt']} | grid [{r['grid_low']:.6g} … {r['grid_high']:.6g}] mid {r['grid_mid']:.6g} | score {r['score']:.1f}")
+                     f"T{r['recent_touch']} A{r['recent_alt']} | S altR {r['s_alt_ratio']:.2f} bal {r['s_touch_bal']:.2f} cv {r['s_atr_cv']:.2f} d {r['s_drift']:.2f}% "
+                     f"| grid [{r['grid_low']:.6g} … {r['grid_high']:.6g}] mid {r['grid_mid']:.6g} | score {r['score']:.1f}")
+
     send(hdr + "\n" + "\n".join(lines))
 
 if __name__ == "__main__":
