@@ -41,5 +41,11 @@ jobs:
           CYCLE_MAX_MIN: ${{ vars.CYCLE_MAX_MIN }}
           MIN_EDGE_TOUCHES_PH: ${{ vars.MIN_EDGE_TOUCHES_PH }}
           WIDE_MIN_RANGE_PCT: ${{ vars.WIDE_MIN_RANGE_PCT }}
+          TOP_FAST: ${{ vars.TOP_FAST }}                 
+          TOP_SEND: ${{ vars.TOP_SEND }}                 
+          FAST_REQUIRE_PINGPONG: ${{ vars.FAST_REQUIRE_PINGPONG }} 
+          FAST_NEAR_MIN_XPH: ${{ vars.FAST_NEAR_MIN_XPH }}      
+          TOP_ADX_HARD_MAX: ${{ vars.TOP_ADX_HARD_MAX }}           
+          TOP_DRIFT_HARD_MAX: ${{ vars.TOP_DRIFT_HARD_MAX }} 
         run: |
           python scan_bingx_grid.py
