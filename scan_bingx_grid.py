@@ -68,6 +68,21 @@ CYCLE_MIN_MIN = _env_float("CYCLE_MIN_MIN", 5)
 CYCLE_MAX_MIN = _env_float("CYCLE_MAX_MIN", 35)
 MIN_EDGE_TOUCHES_PH = _env_float("MIN_EDGE_TOUCHES_PH", 6)
 WIDE_MIN_RANGE_PCT = _env_float("WIDE_MIN_RANGE_PCT", 0.04)  # >= 4% range on 5m window
+TOP_ADX_HARD_MAX     = _env_float("TOP_ADX_HARD_MAX", 30.0)
+TOP_DRIFT_HARD_MAX   = _env_float("TOP_DRIFT_HARD_MAX", 0.70)   # 70% of window range
+FAST_NEAR_MIN_XPH    = _env_float("FAST_NEAR_MIN_XPH", 18.0)    # NEAR için sıkı alt eşik
+if fast_pp:
+    fst = [x for x in fast_pp if float(x.get("xph_n", 0.0)) >= FAST_NEAR_MIN_XPH]
+    fst = sorted(
+        fst,
+        key=lambda x: (-float(x.get("xph_n",0.0)),
+                       -float(x.get("edgeph_n",0.0)),
+                        float(x.get("med_n",1e9)),
+                       -float(x.get("range_pct",0.0))),
+    )[:TOP_FAST]
+    if fst:
+        send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
+
 FAST_REQUIRE_PINGPONG = _env_int("FAST_REQUIRE_PINGPONG", 1)  # 1=require PP, 0=allow FAST without PP
 
 # How many lines to send per section
@@ -277,16 +292,16 @@ def send_telegram(msg: str) -> None:
         print("[info] Telegram env yok; mesaj atılmadı.")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    maxlen = 3800  # Telegram hard cap ~4096; be safe
-    parts = [msg[i:i+maxlen] for i in range(0, len(msg), maxlen)] or [msg]
-    for i, part in enumerate(parts, 1):
+    # 3800 karakterlik parçalara böl
+    for part in [msg[i:i+3800] for i in range(0, len(msg), 3800)]:
         try:
             r = requests.post(url, data={"chat_id": chat_id, "text": part}, timeout=15)
             if r.status_code != 200:
                 print("[warn] Telegram response:", r.text)
         except Exception as e:
             print("[warn] Telegram exception:", e)
-        time.sleep(0.2)
+        time.sleep(0.25)
+
 
 
 
@@ -536,6 +551,10 @@ def main():
 
 
     # ----- Ranking & Telegram -----
+    allres = [d for d in allres
+          if float(d.get("adx", 0.0)) <= TOP_ADX_HARD_MAX
+          and float(d.get("drift_ratio", 0.0)) <= TOP_DRIFT_HARD_MAX]
+
     allres.sort(
         key=lambda x: (0 if x["pingpong_ok"] else 1, 0 if x.get("fast_ok") else 1, -(x["atr_pct"] * x["range_pct"]))
     )
