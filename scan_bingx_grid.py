@@ -1,7 +1,10 @@
 import os, time, math, requests
 from typing import List, Dict, Any, Tuple
 
+
 import ccxt  # public-only BingX access via ccxt
+
+
 
 
 # ---------------- ENV & CONSTANTS ----------------
@@ -13,6 +16,8 @@ def _env_float(n: str, d: float) -> float:
         return d
 
 
+
+
 def _env_int(n: str, d: int) -> int:
     try:
         v = os.environ.get(n, "")
@@ -21,12 +26,17 @@ def _env_int(n: str, d: int) -> int:
         return d
 
 
+
+
 def _env_str(n: str, d: str) -> str:
     v = os.environ.get(n, "")
     return v if v not in ("", None) else d
 
 
+
+
 ENABLE_RATE_LIMIT = True
+
 
 # Core scope
 TOP_K = _env_int("TOP_K", 80)
@@ -36,12 +46,15 @@ ADX_MAX = _env_float("ADX_MAX", 13.0)
 MID_CROSS_MIN = _env_int("MID_CROSS_MIN", 18)
 DRIFT_MAX_RATIO = _env_float("DRIFT_MAX_RATIO", 0.15)
 
+
 # Liquidity & listing age
 MIN_QVOL_USDT = _env_float("MIN_QVOL_USDT", 1_000_000.0)  # 24h quoteVolume
 LISTED_MIN_DAYS = _env_int("LISTED_MIN_DAYS", 30)         # exclude too-new listings (approx)
 
+
 # Grid width floor (based on ATR)
 MIN_GRID_K_ATR = _env_float("MIN_GRID_K_ATR", 1.0)
+
 
 # Fast S controls (1m diagnostics)
 FAST_S_MODE = _env_int("FAST_S_MODE", 1)               # 1=on, 0=off
@@ -57,11 +70,20 @@ MIN_EDGE_TOUCHES_PH = _env_float("MIN_EDGE_TOUCHES_PH", 6)
 WIDE_MIN_RANGE_PCT = _env_float("WIDE_MIN_RANGE_PCT", 0.04)  # >= 4% range on 5m window
 FAST_REQUIRE_PINGPONG = _env_int("FAST_REQUIRE_PINGPONG", 1)  # 1=require PP, 0=allow FAST without PP
 
+# How many lines to send per section
+TOP_FAST = _env_int("TOP_FAST", 12)
+TOP_SEND = _env_int("TOP_SEND", 12)
+
+
+
+
 
 
 # ---------------- HELPERS ----------------
 def pct(x: float) -> str:
     return f"{x * 100:.2f}%"
+
+
 
 
 def sma(vals: List[float], period: int) -> List[float]:
@@ -72,6 +94,8 @@ def sma(vals: List[float], period: int) -> List[float]:
             s -= vals[i - period]
         out.append(s / period if i >= period - 1 else float("nan"))
     return out
+
+
 
 
 def atr_from_ohlc(values: List[Tuple[float, float, float, float]], period: int = 14) -> float:
@@ -86,6 +110,8 @@ def atr_from_ohlc(values: List[Tuple[float, float, float, float]], period: int =
     if len(trs) < period:
         return 0.0
     return sum(trs[-period:]) / period
+
+
 
 
 def adx14(ohlc: List[Tuple[float, float, float, float]]) -> float:
@@ -111,6 +137,7 @@ def adx14(ohlc: List[Tuple[float, float, float, float]]) -> float:
         ndms.append(minus_dm)
         prev = cur
 
+
     def wilder(arr: List[float], p: int) -> List[float]:
         out = []
         sm = sum(arr[:p])
@@ -120,24 +147,31 @@ def adx14(ohlc: List[Tuple[float, float, float, float]]) -> float:
             out.append(sm)
         return out
 
+
     if min(len(trs), len(pdms), len(ndms)) < n:
         return 100.0
+
 
     atr_ws, pdi_ws, ndi_ws = wilder(trs, n), wilder(pdms, n), wilder(ndms, n)
     ln = min(len(atr_ws), len(pdi_ws), len(ndi_ws))
     atr_ws, pdi_ws, ndi_ws = atr_ws[-ln:], pdi_ws[-ln:], ndi_ws[-ln:]
 
+
     plus_di = [(pdi_ws[i] / atr_ws[i] * 100.0) if atr_ws[i] > 0 else 0.0 for i in range(ln)]
     minus_di = [(ndi_ws[i] / atr_ws[i] * 100.0) if atr_ws[i] > 0 else 0.0 for i in range(ln)]
+
 
     dx = []
     for i in range(ln):
         s = plus_di[i] + minus_di[i]
         dx.append((abs(plus_di[i] - minus_di[i]) / s * 100.0) if s > 0 else 0.0)
 
+
     if len(dx) < n:
         return 100.0
     return sum(dx[-n:]) / n
+
+
 
 
 def mid_cross_count(closes: List[float], mid: List[float]) -> int:
@@ -155,6 +189,8 @@ def mid_cross_count(closes: List[float], mid: List[float]) -> int:
     return cnt
 
 
+
+
 def percentile(sorted_vals: List[float], q: float) -> float:
     if not sorted_vals:
         return float("nan")
@@ -167,6 +203,8 @@ def percentile(sorted_vals: List[float], q: float) -> float:
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
 
 
+
+
 def touches_per_hour(closes: List[float], q_lo: float = 0.2, q_hi: float = 0.8) -> float:
     S = sorted(closes)
     lo = percentile(S, q_lo)
@@ -177,6 +215,8 @@ def touches_per_hour(closes: List[float], q_lo: float = 0.2, q_hi: float = 0.8) 
             touches += 1
     hours = max(len(closes) / 60.0, 1e-6)
     return touches / hours
+
+
 
 
 def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
@@ -192,13 +232,16 @@ def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
                 cross_idx.append(i)
         prev_diff = diff
 
+
     # Exclude warmup (~20 bars) from the duration
     warmup = 19
     effective_len = max(len(closes) - warmup, 1)
     hours = max(effective_len / 60.0, 1e-6)
 
+
     # 1) count-based rate
     count_rate = len(cross_idx) / hours
+
 
     # 2) rate derived from median interval (more robust)
     intervals = [(cross_idx[i] - cross_idx[i - 1]) for i in range(1, len(cross_idx))]
@@ -208,7 +251,10 @@ def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
     med = float(intervals[len(intervals) // 2])  # bars in minutes (1 bar = 1 min on 1m tf)
     rate_from_med = (60.0 / med) if (med > 0 and math.isfinite(med)) else 0.0
 
+
     return max(count_rate, rate_from_med), med
+
+
 
 
 def suggest_grid(last: float, atr_abs: float) -> Tuple[float, float, int]:
@@ -222,6 +268,8 @@ def suggest_grid(last: float, atr_abs: float) -> Tuple[float, float, int]:
     return (last - half, last + half, 12)
 
 
+
+
 def send_telegram(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
     chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
@@ -229,16 +277,23 @@ def send_telegram(msg: str) -> None:
         print("[info] Telegram env yok; mesaj atılmadı.")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        r = requests.post(url, data={"chat_id": chat_id, "text": msg}, timeout=15)
-        if r.status_code != 200:
-            print("[warn] Telegram response:", r.text)
-    except Exception as e:
-        print("[warn] Telegram exception:", e)
+    maxlen = 3800  # Telegram hard cap ~4096; be safe
+    parts = [msg[i:i+maxlen] for i in range(0, len(msg), maxlen)] or [msg]
+    for i, part in enumerate(parts, 1):
+        try:
+            r = requests.post(url, data={"chat_id": chat_id, "text": part}, timeout=15)
+            if r.status_code != 200:
+                print("[warn] Telegram response:", r.text)
+        except Exception as e:
+            print("[warn] Telegram exception:", e)
+        time.sleep(0.2)
+
 
 
 def _human_tags(tags: List[str]) -> str:
     return "".join([f"[{t}]" for t in tags])
+
+
 
 
 def to_human(d: Dict[str, Any]) -> str:
@@ -256,6 +311,8 @@ def to_human(d: Dict[str, Any]) -> str:
     )
 
 
+
+
 def ticker_quote_usdt(tk: Dict[str, Any]) -> float:
     qv = tk.get("quoteVolume")
     if qv is not None:
@@ -269,6 +326,8 @@ def ticker_quote_usdt(tk: Dict[str, Any]) -> float:
         return float(last) * float(base)
     except Exception:
         return 0.0
+
+
 
 
 def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]) -> float:
@@ -293,15 +352,19 @@ def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]
         return -1.0  # unknown → don't block
 
 
+
+
 # ---------------- MAIN ----------------
 def main():
     print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
+
     markets = ex.load_markets()
     symbols = [s for s, m in markets.items() if m.get("contract") and m.get("quote") == "USDT"]
     if not symbols:
         raise RuntimeError("BingX USDT-M contract listesi boş.")
+
 
     # fetch tickers (with fallback)
     def safe_fetch_tickers(symbols):
@@ -312,7 +375,9 @@ def main():
             all_tickers = ex.fetch_tickers()
             return {s: all_tickers[s] for s in symbols if s in all_tickers}
 
+
     tickers = safe_fetch_tickers(symbols)
+
 
     def notional(t: Dict[str, Any]) -> float:
         last = t.get("last") or t.get("close") or 0.0
@@ -323,10 +388,12 @@ def main():
         except Exception:
             return 0.0
 
+
     # rank by notional and cut to TOP_K
     pairs = [(s, tickers[s]) for s in symbols if s in tickers]
     pairs.sort(key=lambda x: notional(x[1]), reverse=True)
     pairs = pairs[:TOP_K]
+
 
     pp, fast_pp, allres = [], [], []
     for sym, tk in pairs:
@@ -334,28 +401,34 @@ def main():
             qvol = ticker_quote_usdt(tk)
             liq_ok = (qvol >= MIN_QVOL_USDT) if MIN_QVOL_USDT > 0 else True
 
+
             # ----- 5m window (≈16h) -----
             ohlcv5 = ex.fetch_ohlcv(sym, timeframe="5m", limit=200)
             if not ohlcv5 or len(ohlcv5) < 60:
                 print("SKIP (yetersiz 5m OHLCV) ", sym)
                 continue
 
+
             closes5 = [float(c) for _, o, h, l, c, v in ohlcv5]
             ohlc5 = [(float(o), float(h), float(l), float(c)) for _, o, h, l, c, v in ohlcv5]
             last = closes5[-1]
+
 
             atr50 = atr_from_ohlc(ohlc5, period=50)
             window = closes5[-180:] if len(closes5) >= 180 else closes5
             total_range = (max(window) - min(window)) if window else 0.0
             rng = (total_range / last) if last > 0 else 0.0
 
+
             lower, upper, levels = suggest_grid(last, atr50)
+
 
             adx_val = adx14(ohlc5[-150:])
             mid5 = sma(closes5, 20)
             midcross5 = mid_cross_count(closes5[-180:], mid5[-180:])
             drift = abs(closes5[-1] - closes5[0])
             drift_ratio = (drift / total_range) if total_range > 0 else 0.0
+
 
             atr_pct = (atr50 / last) if last > 0 else 0.0
             base_ok = (atr_pct >= ATR_PCT_MIN and rng >= RANGE_PCT_MIN and liq_ok)
@@ -364,9 +437,11 @@ def main():
                 days = estimate_listing_age_days(ex, sym, markets.get(sym, {}))
                 age_ok = (days < 0) or (days >= LISTED_MIN_DAYS)
 
+
             pingpong_ok = (
                 base_ok and age_ok and (adx_val <= ADX_MAX) and (midcross5 >= MID_CROSS_MIN) and (drift_ratio <= DRIFT_MAX_RATIO)
             )
+
 
             # ----- FAST S (1m) -----
             fast_checked = False
@@ -388,9 +463,12 @@ def main():
                         and wide_ok
                     )
                     xph, med, edgeph = f"{xph_val:.1f}", f"{med_min:.0f}", f"{edgeph_val:.1f}"
+                    xph_n, med_n, edgeph_n = float(xph_val), float(med_min), float(edgeph_val)
                 else:
                     xph, med, edgeph = "NA", "NA", "NA"
+                    xph_n = med_n = edgeph_n = 0.0
                     fast_ok = False
+
 
             # ----- why-tags for readability -----
             why = []
@@ -408,6 +486,7 @@ def main():
                 why.append("MID")
             if drift_ratio > DRIFT_MAX_RATIO:
                 why.append("DRIFT")
+
 
             d = {
                 "symbol": sym,
@@ -428,7 +507,11 @@ def main():
                 "xph": xph,
                 "med": med,
                 "edgeph": edgeph,
+                "xph_n": (xph_n if "xph_n" in locals() else 0.0),
+                "med_n": (med_n if "med_n" in locals() else 0.0),
+                "edgeph_n": (edgeph_n if "edgeph_n" in locals() else 0.0),
             }
+
 
             if base_ok:
                 allres.append(d)
@@ -436,10 +519,12 @@ def main():
             else:
                 print("SKIP", to_human(d))
 
+
             if pingpong_ok:
                 pp.append(d)
             if fast_ok and (pingpong_ok or FAST_REQUIRE_PINGPONG == 0):
                 fast_pp.append(d)
+
 
             time.sleep(0.25)  # be gentle with API
         except ccxt.NetworkError as e:
@@ -449,23 +534,35 @@ def main():
             print("ERR", sym, e)
             time.sleep(0.2)
 
+
     # ----- Ranking & Telegram -----
     allres.sort(
         key=lambda x: (0 if x["pingpong_ok"] else 1, 0 if x.get("fast_ok") else 1, -(x["atr_pct"] * x["range_pct"]))
     )
 
+
     if fast_pp:
-        fst = sorted(fast_pp, key=lambda x: x["atr_pct"] * x["range_pct"], reverse=True)[:8]
+        fst = sorted(
+            fast_pp,
+            key=lambda x: (-float(x.get("xph_n",0.0)), -float(x.get("edgeph_n",0.0)), float(x.get("med_n",1e9)), -float(x.get("range_pct",0.0))),
+        )[:TOP_FAST]
         send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
 
+
     if pp:
-        pps = sorted(pp, key=lambda x: x["atr_pct"] * x["range_pct"], reverse=True)[:8]
+        pps = sorted(
+            pp,
+            key=lambda x: (-float(x.get("xph_n",0.0)), -float(x.get("edgeph_n",0.0)), float(x.get("med_n",1e9)), -float(x.get("range_pct",0.0))),
+        )[:TOP_FAST]
         send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))
 
+
     header = "BingX Grid Scan Sonuçları (Top adaylar)\n"
-    lines = [to_human(d) for d in allres[:12]]
+    lines = [to_human(d) for d in allres[:TOP_SEND]]
     send_telegram(header + ("\n".join(lines) if lines else "(Aday bulunamadı)"))
     print("\n" + header + ("\n".join(lines) if lines else "(Aday bulunamadı)") + "\n")
+
+
 
 
 if __name__ == "__main__":
