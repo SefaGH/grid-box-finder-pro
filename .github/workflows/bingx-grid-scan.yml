@@ -1,12 +1,45 @@
-name: tmp
-on: {workflow_dispatch: {}}
+name: BingX Grid Scan
+
+on:
+  schedule:
+    - cron: '12 * * * *'   # Her saat :12'de
+  workflow_dispatch: {}
+
 jobs:
-  x:
+  run-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: |
-          python -V
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run BingX Grid Scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOP_K: ${{ vars.TOP_K }}
+          ATR_PCT_MIN: ${{ vars.ATR_PCT_MIN }}
+          RANGE_PCT_MIN: ${{ vars.RANGE_PCT_MIN }}
+          ADX_MAX: ${{ vars.ADX_MAX }}
+          MID_CROSS_MIN: ${{ vars.MID_CROSS_MIN }}
+          DRIFT_MAX_RATIO: ${{ vars.DRIFT_MAX_RATIO }}
+          MIN_QVOL_USDT: ${{ vars.MIN_QVOL_USDT }}
+          LISTED_MIN_DAYS: ${{ vars.LISTED_MIN_DAYS }}
+          MIN_GRID_K_ATR: ${{ vars.MIN_GRID_K_ATR }}
+          FAST_S_MODE: ${{ vars.FAST_S_MODE }}
+          FAST_TF: ${{ vars.FAST_TF }}
+          FAST_LIMIT: ${{ vars.FAST_LIMIT }}
+          MIN_CROSSES_PER_HOUR: ${{ vars.MIN_CROSSES_PER_HOUR }}
+          CYCLE_MIN_MIN: ${{ vars.CYCLE_MIN_MIN }}
+          CYCLE_MAX_MIN: ${{ vars.CYCLE_MAX_MIN }}
+          MIN_EDGE_TOUCHES_PH: ${{ vars.MIN_EDGE_TOUCHES_PH }}
+          WIDE_MIN_RANGE_PCT: ${{ vars.WIDE_MIN_RANGE_PCT }}
+        run: |
+          python scan_bingx_grid.py
