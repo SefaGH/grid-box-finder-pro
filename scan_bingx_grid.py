@@ -1,3 +1,10 @@
+"""
+BingX Grid Scanner — Fast S mode (v1.1)
+- FAST_TF sanitization (strip quotes, fallback to 1m)
+- crosses_per_hour(): exclude warmup + median-rate fallback
+- FAST_REQUIRE_PINGPONG env flag (default=1) to gate FAST block
+"""
+
 import os, time, math, requests
 from typing import List, Dict, Any, Tuple
 
@@ -8,7 +15,7 @@ import ccxt  # public-only BingX access via ccxt
 def _env_float(n: str, d: float) -> float:
     try:
         v = os.environ.get(n, "")
-        return float(v) if v not in ("", None) else d
+        return float(v) if str(v).strip() != "" else d
     except Exception:
         return d
 
@@ -16,19 +23,19 @@ def _env_float(n: str, d: float) -> float:
 def _env_int(n: str, d: int) -> int:
     try:
         v = os.environ.get(n, "")
-        return int(v) if v not in ("", None) else d
+        return int(v) if str(v).strip() != "" else d
     except Exception:
         return d
 
 
 def _env_str(n: str, d: str) -> str:
     v = os.environ.get(n, "")
-    return v if v not in ("", None) else d
+    return v if str(v).strip() != "" else d
 
 
 ENABLE_RATE_LIMIT = True
 
-# Core scope
+# Core scope (defaults can be overridden by env)
 TOP_K = _env_int("TOP_K", 80)
 ATR_PCT_MIN = _env_float("ATR_PCT_MIN", 0.0025)       # >= 0.25%
 RANGE_PCT_MIN = _env_float("RANGE_PCT_MIN", 0.015)    # >= 1.5%
@@ -45,8 +52,7 @@ MIN_GRID_K_ATR = _env_float("MIN_GRID_K_ATR", 1.0)
 
 # Fast S controls (1m diagnostics)
 FAST_S_MODE = _env_int("FAST_S_MODE", 1)               # 1=on, 0=off
-FAST_TF = _env_str("FAST_TF", "1m")
-FAST_TF = FAST_TF.replace('"','').replace("'","")
+FAST_TF = _env_str("FAST_TF", "1m").replace('"', "").replace("'", "")
 if FAST_TF not in ("1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d","3d","1w","1M"):
     FAST_TF = "1m"
 FAST_LIMIT = _env_int("FAST_LIMIT", 360)               # ~6h in 1m
@@ -55,6 +61,9 @@ CYCLE_MIN_MIN = _env_float("CYCLE_MIN_MIN", 5)
 CYCLE_MAX_MIN = _env_float("CYCLE_MAX_MIN", 35)
 MIN_EDGE_TOUCHES_PH = _env_float("MIN_EDGE_TOUCHES_PH", 6)
 WIDE_MIN_RANGE_PCT = _env_float("WIDE_MIN_RANGE_PCT", 0.04)  # >= 4% range on 5m window
+
+# Gate: require pingpong_ok for FAST S?
+FAST_REQUIRE_PINGPONG = _env_int("FAST_REQUIRE_PINGPONG", 1)  # 1 = require, 0 = allow fast even if pingpong fails
 
 
 # ---------------- HELPERS ----------------
@@ -206,7 +215,7 @@ def crosses_per_hour(closes: List[float]) -> Tuple[float, float]:
     med = float(intervals[len(intervals) // 2])  # bars in minutes (1 bar = 1 min on 1m tf)
     rate_from_med = (60.0 / med) if (med > 0 and math.isfinite(med)) else 0.0
 
-    return max(count_rate, rate_from_med), med
+    return max(count_rate, rate_from_med), med  # xph, median minutes
 
 
 def suggest_grid(last: float, atr_abs: float) -> Tuple[float, float, int]:
@@ -293,7 +302,7 @@ def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]
 
 # ---------------- MAIN ----------------
 def main():
-    print("== BingX Grid Scan — Fast S mode ==")
+    print("== BingX Grid Scan — Fast S mode v1.1 ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
     markets = ex.load_markets()
@@ -366,11 +375,12 @@ def main():
                 base_ok and age_ok and (adx_val <= ADX_MAX) and (midcross5 >= MID_CROSS_MIN) and (drift_ratio <= DRIFT_MAX_RATIO)
             )
 
-            # ----- FAST S (1m) — only if ping-pong OK -----
+            # ----- FAST S (1m) -----
             fast_checked = False
             fast_ok = False
             xph = med = edgeph = "-"
-            if FAST_S_MODE and pingpong_ok:
+            allow_fast = FAST_S_MODE and (pingpong_ok or (FAST_REQUIRE_PINGPONG == 0))
+            if allow_fast:
                 fast_checked = True
                 ohlcv1 = ex.fetch_ohlcv(sym, timeframe=FAST_TF, limit=FAST_LIMIT)
                 if ohlcv1 and len(ohlcv1) >= 120:
@@ -435,7 +445,7 @@ def main():
 
             if pingpong_ok:
                 pp.append(d)
-            if pingpong_ok and fast_ok:
+            if fast_ok and (pingpong_ok or FAST_REQUIRE_PINGPONG == 0):
                 fast_pp.append(d)
 
             time.sleep(0.25)  # be gentle with API
