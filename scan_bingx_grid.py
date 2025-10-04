@@ -71,18 +71,6 @@ WIDE_MIN_RANGE_PCT = _env_float("WIDE_MIN_RANGE_PCT", 0.04)  # >= 4% range on 5m
 TOP_ADX_HARD_MAX     = _env_float("TOP_ADX_HARD_MAX", 30.0)
 TOP_DRIFT_HARD_MAX   = _env_float("TOP_DRIFT_HARD_MAX", 0.70)   # 70% of window range
 FAST_NEAR_MIN_XPH    = _env_float("FAST_NEAR_MIN_XPH", 18.0)    # NEAR için sıkı alt eşik
-if fast_pp:
-    fst = [x for x in fast_pp if float(x.get("xph_n", 0.0)) >= FAST_NEAR_MIN_XPH]
-    fst = sorted(
-        fst,
-        key=lambda x: (-float(x.get("xph_n",0.0)),
-                       -float(x.get("edgeph_n",0.0)),
-                        float(x.get("med_n",1e9)),
-                       -float(x.get("range_pct",0.0))),
-    )[:TOP_FAST]
-    if fst:
-        send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
-
 FAST_REQUIRE_PINGPONG = _env_int("FAST_REQUIRE_PINGPONG", 1)  # 1=require PP, 0=allow FAST without PP
 
 # How many lines to send per section
@@ -560,21 +548,28 @@ def main():
     )
 
 
-    if fast_pp:
-        fst = sorted(
-            fast_pp,
-            key=lambda x: (-float(x.get("xph_n",0.0)), -float(x.get("edgeph_n",0.0)), float(x.get("med_n",1e9)), -float(x.get("range_pct",0.0))),
-        )[:TOP_FAST]
+if fast_pp:
+    # Apply FAST_NEAR_MIN_XPH filter before sorting/sending
+    _fst = [x for x in fast_pp if float(x.get("xph_n", 0.0)) >= FAST_NEAR_MIN_XPH]
+    fst = sorted(
+        _fst,
+        key=lambda x: (-float(x.get("xph_n", 0.0)),
+                       -float(x.get("edgeph_n", 0.0)),
+                        float(x.get("med_n", 1e9)),
+                       -float(x.get("range_pct", 0.0))),
+    )[:TOP_FAST]
+    if fst:
         send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
 
-
-    if pp:
-        pps = sorted(
-            pp,
-            key=lambda x: (-float(x.get("xph_n",0.0)), -float(x.get("edgeph_n",0.0)), float(x.get("med_n",1e9)), -float(x.get("range_pct",0.0))),
-        )[:TOP_FAST]
-        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))
-
+if pp:
+    pps = sorted(
+        pp,
+        key=lambda x: (-float(x.get("xph_n", 0.0)),
+                       -float(x.get("edgeph_n", 0.0)),
+                        float(x.get("med_n", 1e9)),
+                       -float(x.get("range_pct", 0.0))),
+    )[:TOP_FAST]
+    send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))
 
     header = "BingX Grid Scan Sonuçları (Top adaylar)\n"
     lines = [to_human(d) for d in allres[:TOP_SEND]]
