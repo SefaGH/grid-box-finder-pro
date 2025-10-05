@@ -149,7 +149,7 @@ def format_telegram_scan_message(
         blocks: List[str] = [title_fast]
         for idx, c in enumerate(fast_candidates, start=1):
             blocks.append(_fmt_coin_block(idx, c))
-            blocks.append("—" * 17)
+            blocks.append("")
         if blocks and blocks[-1].startswith("—"):
             blocks.pop()
         sections.append("\n".join(blocks))
@@ -191,7 +191,7 @@ def format_telegram_scan_message(
         blocks = [title_top]
         for idx, c in enumerate(top_candidates, start=1):
             blocks.append(_fmt_coin_block(idx, c))
-            blocks.append("—" * 17)
+            blocks.append("")
         if blocks and blocks[-1].startswith("—"):
             blocks.pop()
         sections.append("\n".join(blocks))
