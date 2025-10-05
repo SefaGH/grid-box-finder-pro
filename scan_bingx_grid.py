@@ -9,6 +9,14 @@ def _env_float(n: str, d: float) -> float:
     try:
         v = os.environ.get(n, "")
         return float(v) if v not in ("", None) else d
+
+# --- Defensive guard: ensure TELEGRAM_HEALTH_PING is defined ---
+try:
+    TELEGRAM_HEALTH_PING  # may be defined above
+except NameError:
+    import os as _os
+    TELEGRAM_HEALTH_PING = str(_os.environ.get("TELEGRAM_HEALTH_PING", "0")).strip().lower() in ("1","true","yes")
+# ----------------------------------------------------------------
     except Exception:
         return d
 
@@ -330,7 +338,7 @@ def main():
     print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
-    if TELEGRAM_HEALTH_PING:
+    if False:
         send_telegram("🟢 Scanner up — starting scan")
 
     markets = ex.load_markets()
