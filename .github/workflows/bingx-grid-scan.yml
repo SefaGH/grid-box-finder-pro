@@ -50,5 +50,8 @@ jobs:
           TELEGRAM_HEALTH_PING: ${{ vars.TELEGRAM_HEALTH_PING }}
           TELEGRAM_DEBUG: ${{ vars.TELEGRAM_DEBUG }}
           TELEGRAM_ALWAYS_NEAR: ${{ vars.TELEGRAM_ALWAYS_NEAR }}
+          TELEGRAM_PIN_FAST: "1"   # FAST mesajını otomatik pinle
+          SEND_GRID_CSV: "1"       # S coin için grid.csv gönder
+          TOP_FAST: "3"            # FAST listede 3 adaya kadar göster
         run: |
           python scan_bingx_grid.py
