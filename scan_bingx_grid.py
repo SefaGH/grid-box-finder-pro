@@ -676,12 +676,16 @@ def _to_fmt_speed(d):
     return {"xph": d.get("xph"), "med": med_txt, "edgeph": d.get("edgeph")}
 
 def _to_fmt_entry(d):
+    import re as _re
+    base = d.get("base")
+    quote = d.get("quote")
     sym = d.get("symbol")
-    try:
-        if isinstance(sym, str) and sym.endswith(":USDT"):
-            sym = sym[:-6]
-    except Exception:
-        pass
+    if isinstance(base, str) and isinstance(quote, str) and base and quote:
+        sym = f"{base}/{quote}"
+    if isinstance(sym, str):
+        sym = _re.sub(r":USDT$", "", sym)
+        sym = _re.sub(r":USDC$", "", sym)
+        sym = _re.sub(r":BUSD$", "", sym)
     return {
         "symbol": sym,
         "last": d.get("last"),
@@ -754,7 +758,9 @@ def emit_html_and_csv(pp, fast_pp, allres) -> None:
 
         if last_mid and str(os.environ.get("TELEGRAM_PIN_FAST", "")).strip():
             try:
+                print(f"[tg-debug] trying to pin message_id={last_mid}")
                 pin_last_message(last_mid)
+                print("[tg-debug] pin attempted")
             except Exception as e:
                 print("[warn] pin exception:", e)
 

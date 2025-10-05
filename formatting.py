@@ -1,8 +1,10 @@
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import html
+
 TELEGRAM_HARD_LIMIT = 4096
 SAFE_MARGIN = 560
 CHUNK_LIMIT = TELEGRAM_HARD_LIMIT - SAFE_MARGIN
+
 def _fmt_float(x: Optional[float], digits: int = 6) -> str:
     if x is None:
         return "-"
@@ -14,6 +16,7 @@ def _fmt_float(x: Optional[float], digits: int = 6) -> str:
         return f"{x:.3e}"
     s = f"{x:.{digits}f}".rstrip("0").rstrip(".")
     return s if s else "0"
+
 def _fmt_pct(ratio: Optional[float], digits: int = 2) -> str:
     if ratio is None:
         return "-"
@@ -21,6 +24,7 @@ def _fmt_pct(ratio: Optional[float], digits: int = 2) -> str:
         return f"{float(ratio) * 100:.{digits}f}%"
     except (TypeError, ValueError):
         return "-"
+
 def _fmt_range(lo: Optional[float], hi: Optional[float], mult: int) -> str:
     if lo is None or hi is None or mult is None:
         return "-"
@@ -29,6 +33,7 @@ def _fmt_range(lo: Optional[float], hi: Optional[float], mult: int) -> str:
     except Exception:
         mult = 0
     return f"[{_fmt_float(lo)} – {_fmt_float(hi)}] × {mult}"
+
 def _fmt_tag_list(tags: List[Any]) -> str:
     if not tags:
         return ""
@@ -39,6 +44,7 @@ def _fmt_tag_list(tags: List[Any]) -> str:
         except Exception:
             continue
     return " ".join(safe)
+
 def _fmt_speed(speed: Dict[str, Any]) -> str:
     if not speed:
         return ""
@@ -60,15 +66,17 @@ def _fmt_speed(speed: Dict[str, Any]) -> str:
     edge = speed.get("edgeph", None)
     if edge is not None:
         try:
-            parts.append(f"edge={_fmt_float(float(edge), 1)}")
+            parts.append(f"edgeph={_fmt_float(float(edge), 1)}")
         except Exception:
-            parts.append(f"edge={html.escape(str(edge))}")
+            parts.append(f"edgeph={html.escape(str(edge))}")
     return " | ".join(parts)
+
 def _safe_num(x: Any, default: Optional[float] = None) -> Optional[float]:
     try:
         return float(x)
     except (TypeError, ValueError):
         return default
+
 def _fmt_coin_block(i: int, c: Dict[str, Any]) -> str:
     sym = html.escape(c.get("symbol", "-"))
     last    = _fmt_float(_safe_num(c.get("last")))
@@ -81,6 +89,7 @@ def _fmt_coin_block(i: int, c: Dict[str, Any]) -> str:
     tags    = _fmt_tag_list(c.get("tags", []))
     grid    = _fmt_range(_safe_num(c.get("grid_low")), _safe_num(c.get("grid_high")), c.get("grid_lines") or 0)
     speed   = _fmt_speed(c.get("speed", {}))
+
     lines: List[str] = []
     lines.append(f"{i}️⃣ <b>{sym}</b>")
     lines.append(f" • Fiyat: <b>{last}</b>")
@@ -100,6 +109,7 @@ def _fmt_coin_block(i: int, c: Dict[str, Any]) -> str:
     if speed:
         lines.append(f" • Hız: {html.escape(speed)}")
     return "\n".join(lines)
+
 def _split_chunks(text: str, limit: int = CHUNK_LIMIT) -> List[str]:
     if len(text) <= limit:
         return [text]
@@ -115,6 +125,7 @@ def _split_chunks(text: str, limit: int = CHUNK_LIMIT) -> List[str]:
     if buf:
         parts.append("".join(buf))
     return parts
+
 def format_telegram_scan_message(
     *,
     scan_started_at: Optional[str] = None,
@@ -133,6 +144,7 @@ def format_telegram_scan_message(
     if scan_started_at:
         head.append(f"<i>{html.escape(scan_started_at)}</i>")
     sections.append("\n".join(head))
+
     if fast_candidates:
         blocks: List[str] = [title_fast]
         for idx, c in enumerate(fast_candidates, start=1):
@@ -141,6 +153,7 @@ def format_telegram_scan_message(
         if blocks and blocks[-1].startswith("—"):
             blocks.pop()
         sections.append("\n".join(blocks))
+
     if s_behavior:
         sb = s_behavior
         sym   = html.escape(sb.get("symbol", "-"))
@@ -173,6 +186,7 @@ def format_telegram_scan_message(
         if speed:
             block.append(f"⚡ Hız: {html.escape(speed)}")
         sections.append("\n".join(block))
+
     if top_candidates:
         blocks = [title_top]
         for idx, c in enumerate(top_candidates, start=1):
@@ -181,5 +195,6 @@ def format_telegram_scan_message(
         if blocks and blocks[-1].startswith("—"):
             blocks.pop()
         sections.append("\n".join(blocks))
+
     full_text = "\n\n".join(sections)
     return _split_chunks(full_text)
