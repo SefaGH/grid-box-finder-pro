@@ -647,6 +647,17 @@ try:
     top_fmt = [_to_fmt_entry(d) for d in (_all[:try_top_send] if _all else [])]
     fast_fmt = [_to_fmt_entry(d) for d in (_fast[:try_top_fast] if _fast else [])]
     if (s_behavior_fmt or top_fmt or fast_fmt):
+
+# ... try: bloğu içinde, _chunks oluşturduğun satırdan hemen önce
+    _title = "" if TELEGRAM_HEALTH_PING else "🟢 Scanner Up — Starting Scan"
+    _chunks = format_telegram_scan_message(
+    scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
+    s_behavior=s_behavior_fmt,
+    top_candidates=top_fmt,
+    fast_candidates=fast_fmt,
+    title_scanner=_title,
+)
+
         _chunks = format_telegram_scan_message(
             scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
             s_behavior=s_behavior_fmt,
