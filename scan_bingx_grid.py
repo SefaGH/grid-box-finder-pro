@@ -2,6 +2,7 @@ import os, time, math, requests
 from typing import List, Dict, Any, Tuple
 
 import ccxt  # public-only BingX access via ccxt
+from formatting import format_telegram_scan_message
 
 # ---------------- ENV & CONSTANTS ----------------
 def _env_float(n: str, d: float) -> float:
@@ -536,3 +537,117 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = True) -> None:
+    import os, requests, time
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
+    TELEGRAM_DEBUG = bool(str(os.environ.get("TELEGRAM_DEBUG", "")))
+    if not token or not chat_id:
+        print("[info] Telegram env yok; mesaj atılmadı.")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    def _mask_chat(cid: str) -> str:
+        s = str(cid)
+        return s[:2] + "***" + s[-3:] if len(s) > 6 else "***"
+    HARD_LIMIT = 4096
+    SAFE = 560
+    LIM = HARD_LIMIT - SAFE
+    lines = msg.splitlines(keepends=True)
+    parts, buf, size = [], [], 0
+    for ln in lines:
+        if size + len(ln) > LIM and buf:
+            parts.append("".join(buf))
+            buf, size = [], 0
+        buf.append(ln)
+        size += len(ln)
+    if buf:
+        parts.append("".join(buf))
+    if not parts:
+        parts = [msg]
+    for idx, part in enumerate(parts, 1):
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": "true" if disable_preview else "false",
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if TELEGRAM_DEBUG:
+                preview = part.replace("\\n", " ")[:120]
+                print(f"[tg-debug] send chunk {idx}/{len(parts)} to {_mask_chat(chat_id)} | len={len(part)} | preview='{preview}…'")
+            r = requests.post(url, data=payload, timeout=20)
+        except Exception as e:
+            print(f"[warn] Telegram exception (chunk {idx}/{len(parts)}): {e}")
+            continue
+        ok, desc, code = False, "", None
+        try:
+            j = r.json()
+            ok = bool(j.get("ok", False))
+            desc = j.get("description", "")
+            code = j.get("error_code")
+        except Exception:
+            pass
+        if r.status_code != 200 or not ok:
+            body = ""
+            try:
+                body = r.text[:300]
+            except Exception:
+                pass
+            print(f"[warn] Telegram API error (chunk {idx}/{len(parts)}): status={r.status_code}, ok={ok}, code={code}, desc={desc}, body={body}")
+        else:
+            if TELEGRAM_DEBUG:
+                print(f"[tg-debug] chunk {idx}/{len(parts)} delivered: ok={ok}")
+        time.sleep(0.2)
+
+
+def _to_fmt_speed(d):
+    try:
+        med_val = d.get("med", None)
+        med_txt = med_val if (med_val in (None, "", "NA")) else f"{int(float(med_val))}m"
+    except Exception:
+        med_txt = d.get("med", "-")
+    return {"xph": d.get("xph"), "med": med_txt, "edgeph": d.get("edgeph")}
+def _to_fmt_entry(d):
+    return {
+        "symbol": d.get("symbol"),
+        "last": d.get("last"),
+        "atr_abs": d.get("atr_abs"),
+        "atr_pct": d.get("atr_pct"),
+        "range_pct": d.get("range_pct"),
+        "adx": d.get("adx"),
+        "mid_cross": d.get("midcross") if ("midcross" in d) else d.get("mid_cross"),
+        "drift_pct": d.get("drift_ratio") if ("drift_ratio" in d) else d.get("drift_pct"),
+        "tags": (["PING-PONG OK"] if d.get("pingpong_ok") else d.get("why_tags", [])) + (["FAST S OK"] if d.get("fast_ok") else []),
+        "grid_low": d.get("grid_lower") if ("grid_lower" in d) else d.get("grid_low"),
+        "grid_high": d.get("grid_upper") if ("grid_upper" in d) else d.get("grid_high"),
+        "grid_lines": d.get("levels") if ("levels" in d) else d.get("grid_lines"),
+        "speed": _to_fmt_speed(d) if d.get("fast_checked") or d.get("speed") else d.get("speed", {}),
+    }
+
+
+# === HTML formatted summary (non-intrusive; runs after regular sends) ===
+try:
+    import time as _t
+    _pp = pp if 'pp' in globals() or 'pp' in locals() else None
+    _fast = fast_pp if 'fast_pp' in globals() or 'fast_pp' in locals() else None
+    _all = allres if 'allres' in globals() or 'allres' in locals() else None
+    s_behavior_fmt = _to_fmt_entry(_pp[0]) if (_pp and len(_pp)>0) else None
+    try_top_send = TOP_SEND if 'TOP_SEND' in globals() or 'TOP_SEND' in locals() else 10
+    try_top_fast = TOP_FAST if 'TOP_FAST' in globals() or 'TOP_FAST' in locals() else 5
+    top_fmt = [_to_fmt_entry(d) for d in (_all[:try_top_send] if _all else [])]
+    fast_fmt = [_to_fmt_entry(d) for d in (_fast[:try_top_fast] if _fast else [])]
+    if (s_behavior_fmt or top_fmt or fast_fmt):
+        _chunks = format_telegram_scan_message(
+            scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
+            s_behavior=s_behavior_fmt,
+            top_candidates=top_fmt,
+            fast_candidates=fast_fmt
+        )
+        for _ch in _chunks:
+            send_telegram(_ch, parse_mode="HTML", disable_preview=True)
+    else:
+        print("[info] HTML summary skipped (no data).")
+except Exception as _e:
+    print(f"[warn] HTML summary error: {_e}")
