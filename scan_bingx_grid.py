@@ -327,6 +327,7 @@ def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]
 
 # ---------------- MAIN ----------------
 def main():
+    global pp, fast_pp, allres
     print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
@@ -509,8 +510,8 @@ def main():
                             float(x.get("med_n", 1e9)),
                            -float(x.get("range_pct", 0.0))),
         )[:TOP_FAST]
-        if fst:
-            send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
+        if fst:# 
+            send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))  # disabled: HTML formatter handles this
     else:
         if TELEGRAM_ALWAYS_NEAR:
             send_telegram("FAST S OK (wide & quick S)\n(şu an eşleşme yok — filtreler sıkı)")
@@ -523,8 +524,8 @@ def main():
                            -float(x.get("edgeph_n", 0.0)),
                             float(x.get("med_n", 1e9)),
                            -float(x.get("range_pct", 0.0))),
-        )[:TOP_FAST]
-        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))
+        )[:TOP_FAST]# 
+        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))  # disabled: HTML formatter handles this
     else:
         if TELEGRAM_ALWAYS_NEAR:
             send_telegram("PING-PONG OK (S davranışı teyitli)\n(şu an eşleşme yok — filtreler sıkı)")
