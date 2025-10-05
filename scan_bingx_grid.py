@@ -62,8 +62,10 @@ FAST_REQUIRE_PINGPONG = _env_int("FAST_REQUIRE_PINGPONG", 1)  # 1=require PP, 0=
 TOP_FAST = _env_int("TOP_FAST", 12)
 TOP_SEND = _env_int("TOP_SEND", 12)
 
-# Optional Telegram knobs (health ping is NOT sent from code; header is in rich message)
-TELEGRAM_DEBUG = str(os.environ.get("TELEGRAM_DEBUG", "0")).strip().lower() not in ("", "0", "false", "no")
+# Optional Telegram knobs
+TELEGRAM_ALWAYS_NEAR = str(os.environ.get("TELEGRAM_ALWAYS_NEAR", "0")).strip().lower() in ("1","true","yes")
+TELEGRAM_HEALTH_PING = str(os.environ.get("TELEGRAM_HEALTH_PING", "0")).strip().lower() in ("1","true","yes")
+TELEGRAM_DEBUG       = str(os.environ.get("TELEGRAM_DEBUG", "0")).strip().lower() not in ("", "0", "false", "no")
 
 # ---------------- HELPERS ----------------
 def pct(x: float) -> str:
@@ -219,49 +221,39 @@ def suggest_grid(last: float, atr_abs: float) -> Tuple[float, float, int]:
     half = last * width_pct / 2.0
     return (last - half, last + half, 12)
 
-def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = True) -> None:
+def send_telegram(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
     chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
-    dbg = str(os.environ.get("TELEGRAM_DEBUG", "0")).strip().lower() not in ("", "0", "false", "no")
     if not token or not chat_id:
         print("[info] Telegram env yok; mesaj atılmadı.")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    dbg = TELEGRAM_DEBUG
+
     def _mask_chat(cid: str) -> str:
         s = str(cid)
-        return s[:2] + "***" + s[-3:] if len(s) > 6 else "***"
-    HARD_LIMIT = 4096
-    SAFE = 560
-    LIM = HARD_LIMIT - SAFE
-    lines = msg.splitlines(keepends=True)
-    parts, buf, size = [], [], 0
-    for ln in lines:
-        if size + len(ln) > LIM and buf:
-            parts.append("".join(buf))
-            buf, size = [], 0
-        buf.append(ln)
-        size += len(ln)
-    if buf:
-        parts.append("".join(buf))
-    if not parts:
-        parts = [msg]
+        if len(s) <= 6:
+            return "***"
+        return s[:2] + "***" + s[-3:]
+
+    parts = [msg[i:i+3500] for i in range(0, len(msg), 3500)] or [msg]
     for idx, part in enumerate(parts, 1):
         try:
-            payload = {
-                "chat_id": chat_id,
-                "text": part,
-                "disable_web_page_preview": "true" if disable_preview else "false",
-            }
-            if parse_mode:
-                payload["parse_mode"] = parse_mode
             if dbg:
-                preview = part.replace("\n", " ")[:120]
+                preview = part.replace("\\n", " ")[:120]
                 print(f"[tg-debug] send chunk {idx}/{len(parts)} to {_mask_chat(chat_id)} | len={len(part)} | preview='{preview}…'")
-            r = requests.post(url, data=payload, timeout=20)
+            r = requests.post(
+                url,
+                data={"chat_id": chat_id, "text": part},
+                timeout=20
+            )
         except Exception as e:
             print(f"[warn] Telegram exception (chunk {idx}/{len(parts)}): {e}")
             continue
-        ok, desc, code = False, "", None
+
+        ok = False
+        desc = ""
+        code = None
         try:
             j = r.json()
             ok = bool(j.get("ok", False))
@@ -269,6 +261,7 @@ def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = T
             code = j.get("error_code")
         except Exception:
             pass
+
         if r.status_code != 200 or not ok:
             body = ""
             try:
@@ -279,7 +272,23 @@ def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = T
         else:
             if dbg:
                 print(f"[tg-debug] chunk {idx}/{len(parts)} delivered: ok={ok}")
-        time.sleep(0.2)
+
+def _human_tags(tags: List[str]) -> str:
+    return "".join([f"[{t}]" for t in tags])
+
+def to_human(d: Dict[str, Any]) -> str:
+    tag = " [PING-PONG OK]" if d.get("pingpong_ok") else ""
+    fast = " [FAST S OK]" if d.get("fast_ok") else ""
+    why = _human_tags(d.get("why_tags", []))
+    extra = ""
+    if d.get("fast_checked"):
+        extra = f" | fast: xph={d.get('xph','-')}, med={d.get('med','-')}m, edgeph={d.get('edgeph','-')}"
+    return (
+        f"{d['symbol']}: last={d['last']:.6g} | ATR={d['atr_abs']:.6g} ({pct(d['atr_pct'])}) | "
+        f"range≈{pct(d['range_pct'])} | ADX≈{d.get('adx', float('nan')):.1f} | "
+        f"mid-cross={d.get('midcross', 0)} | drift%≈{pct(d.get('drift_ratio', 0.0))}{tag}{fast}"
+        f"{(' ' + why) if why else ''} | grid≈[{d['grid_lower']:.6g} … {d['grid_upper']:.6g}] × {d['levels']}{extra}"
+    )
 
 def ticker_quote_usdt(tk: Dict[str, Any]) -> float:
     qv = tk.get("quoteVolume")
@@ -316,36 +325,14 @@ def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]
     except Exception:
         return -1.0  # unknown → don't block
 
-# ---------------- FORMATTERS (for HTML) ----------------
-def _to_fmt_speed(d):
-    try:
-        med_val = d.get("med", None)
-        med_txt = med_val if (med_val in (None, "", "NA")) else f"{int(float(med_val))}m"
-    except Exception:
-        med_txt = d.get("med", "-")
-    return {"xph": d.get("xph"), "med": med_txt, "edgeph": d.get("edgeph")}
-
-def _to_fmt_entry(d):
-    return {
-        "symbol": d.get("symbol"),
-        "last": d.get("last"),
-        "atr_abs": d.get("atr_abs"),
-        "atr_pct": d.get("atr_pct"),
-        "range_pct": d.get("range_pct"),
-        "adx": d.get("adx"),
-        "mid_cross": d.get("midcross") if ("midcross" in d) else d.get("mid_cross"),
-        "drift_pct": d.get("drift_ratio") if ("drift_ratio" in d) else d.get("drift_pct"),
-        "tags": (["PING-PONG OK"] if d.get("pingpong_ok") else d.get("why_tags", [])) + (["FAST S OK"] if d.get("fast_ok") else []),
-        "grid_low": d.get("grid_lower") if ("grid_lower" in d) else d.get("grid_low"),
-        "grid_high": d.get("grid_upper") if ("grid_upper" in d) else d.get("grid_high"),
-        "grid_lines": d.get("levels") if ("levels" in d) else d.get("grid_lines"),
-        "speed": _to_fmt_speed(d) if d.get("fast_checked") or d.get("speed") else d.get("speed", {}),
-    }
-
 # ---------------- MAIN ----------------
 def main():
-    print("== BingX Grid Scan — Fast S mode (rich-only) ==")
+    global pp, fast_pp, allres
+    print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+
+    if TELEGRAM_HEALTH_PING:
+        send_telegram("🟢 Scanner up — starting scan")
 
     markets = ex.load_markets()
     symbols = [s for s, m in markets.items() if m.get("contract") and m.get("quote") == "USDT"]
@@ -421,7 +408,6 @@ def main():
             fast_checked = False
             fast_ok = False
             xph = med = edgeph = "-"
-            xph_n = med_n = edgeph_n = 0.0
             allow_fast = FAST_S_MODE and (pingpong_ok or (FAST_REQUIRE_PINGPONG == 0))
             if allow_fast:
                 fast_checked = True
@@ -441,6 +427,7 @@ def main():
                     xph_n, med_n, edgeph_n = float(xph_val), float(med_min), float(edgeph_val)
                 else:
                     xph, med, edgeph = "NA", "NA", "NA"
+                    xph_n = med_n = edgeph_n = 0.0
                     fast_ok = False
 
             # ----- why-tags for readability -----
@@ -479,13 +466,17 @@ def main():
                 "xph": xph,
                 "med": med,
                 "edgeph": edgeph,
-                "xph_n": xph_n,
-                "med_n": med_n,
-                "edgeph_n": edgeph_n,
+                "xph_n": (xph_n if "xph_n" in locals() else 0.0),
+                "med_n": (med_n if "med_n" in locals() else 0.0),
+                "edgeph_n": (edgeph_n if "edgeph_n" in locals() else 0.0),
             }
 
             if base_ok:
                 allres.append(d)
+                print("OK  ", to_human(d))
+            else:
+                print("SKIP", to_human(d))
+
             if pingpong_ok:
                 pp.append(d)
             if fast_ok and (pingpong_ok or FAST_REQUIRE_PINGPONG == 0):
@@ -499,7 +490,7 @@ def main():
             print("ERR", sym, e)
             time.sleep(0.2)
 
-    # ----- Ranking -----
+    # ----- Ranking & Telegram -----
     allres = [d for d in allres
           if float(d.get("adx", 0.0)) <= TOP_ADX_HARD_MAX
           and float(d.get("drift_ratio", 0.0)) <= TOP_DRIFT_HARD_MAX]
@@ -508,33 +499,156 @@ def main():
         key=lambda x: (0 if x["pingpong_ok"] else 1, 0 if x.get("fast_ok") else 1, -(x["atr_pct"] * x["range_pct"]))
     )
 
-    # ----- Compose & send single HTML Telegram message -----
-    # S Davranışı: varsa ilk pingpong satırı
-    s_behavior_fmt = _to_fmt_entry(pp[0]) if pp else None
-    top_fmt  = [_to_fmt_entry(d) for d in allres[:TOP_SEND]]
-    # Fast list: opsiyonel olarak xph hızına göre sıralı
+    # --- Compose & send Telegram messages ---
+    # 2.1 FAST / NEAR list (apply FAST_NEAR_MIN_XPH before sorting/sending)
     if fast_pp:
-        _fst = [x for x in fast_pp if float(x.get('xph_n', 0.0)) >= FAST_NEAR_MIN_XPH]
-        _fst = sorted(_fst, key=lambda x: (-float(x.get('xph_n', 0.0)),
-                                           -float(x.get('edgeph_n', 0.0)),
-                                            float(x.get('med_n', 1e9)),
-                                           -float(x.get('range_pct', 0.0))))[:TOP_FAST]
-        fast_fmt = [_to_fmt_entry(d) for d in _fst]
+        _fst = [x for x in fast_pp if float(x.get("xph_n", 0.0)) >= FAST_NEAR_MIN_XPH]
+        fst = sorted(
+            _fst,
+            key=lambda x: (-float(x.get("xph_n", 0.0)),
+                           -float(x.get("edgeph_n", 0.0)),
+                            float(x.get("med_n", 1e9)),
+                           -float(x.get("range_pct", 0.0))),
+        )[:TOP_FAST]
+        if fst:# 
+            send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))  # disabled: HTML formatter handles this
     else:
-        fast_fmt = []
+        if TELEGRAM_ALWAYS_NEAR:
+            send_telegram("FAST S OK (wide & quick S)\n(şu an eşleşme yok — filtreler sıkı)")
 
-    chunks = format_telegram_scan_message(
-        scan_started_at=time.strftime("%Y-%m-%d %H:%M"),
-        s_behavior=s_behavior_fmt,
-        top_candidates=top_fmt,
-        fast_candidates=fast_fmt
-    )
-
-    if chunks:
-        for ch in chunks:
-            send_telegram(ch, parse_mode="HTML", disable_preview=True)
+    # 2.2 PING-PONG OK list (S davranışı teyitli)
+    if pp:
+        pps = sorted(
+            pp,
+            key=lambda x: (-float(x.get("xph_n", 0.0)),
+                           -float(x.get("edgeph_n", 0.0)),
+                            float(x.get("med_n", 1e9)),
+                           -float(x.get("range_pct", 0.0))),
+        )[:TOP_FAST]# 
+        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))  # disabled: HTML formatter handles this
     else:
-        send_telegram("📋 BingX Grid Scan — Aday bulunamadı.")
+        if TELEGRAM_ALWAYS_NEAR:
+            send_telegram("PING-PONG OK (S davranışı teyitli)\n(şu an eşleşme yok — filtreler sıkı)")
+
+    # 2.3 Top candidates (after hard caps and ranking)
+    header = "BingX Grid Scan Sonuçları (Top adaylar)\n"
+    lines = [to_human(d) for d in allres[:TOP_SEND]]
+    send_telegram(header + ("\n".join(lines) if lines else "(Aday bulunamadı)"))
+    print("\n" + header + ("\n".join(lines) if lines else "(Aday bulunamadı)") + "\n")
 
 if __name__ == "__main__":
     main()
+
+def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = True) -> None:
+    import os, requests, time
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
+    TELEGRAM_DEBUG = bool(str(os.environ.get("TELEGRAM_DEBUG", "")))
+    if not token or not chat_id:
+        print("[info] Telegram env yok; mesaj atılmadı.")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    def _mask_chat(cid: str) -> str:
+        s = str(cid)
+        return s[:2] + "***" + s[-3:] if len(s) > 6 else "***"
+    HARD_LIMIT = 4096
+    SAFE = 560
+    LIM = HARD_LIMIT - SAFE
+    lines = msg.splitlines(keepends=True)
+    parts, buf, size = [], [], 0
+    for ln in lines:
+        if size + len(ln) > LIM and buf:
+            parts.append("".join(buf))
+            buf, size = [], 0
+        buf.append(ln)
+        size += len(ln)
+    if buf:
+        parts.append("".join(buf))
+    if not parts:
+        parts = [msg]
+    for idx, part in enumerate(parts, 1):
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": "true" if disable_preview else "false",
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if TELEGRAM_DEBUG:
+                preview = part.replace("\\n", " ")[:120]
+                print(f"[tg-debug] send chunk {idx}/{len(parts)} to {_mask_chat(chat_id)} | len={len(part)} | preview='{preview}…'")
+            r = requests.post(url, data=payload, timeout=20)
+        except Exception as e:
+            print(f"[warn] Telegram exception (chunk {idx}/{len(parts)}): {e}")
+            continue
+        ok, desc, code = False, "", None
+        try:
+            j = r.json()
+            ok = bool(j.get("ok", False))
+            desc = j.get("description", "")
+            code = j.get("error_code")
+        except Exception:
+            pass
+        if r.status_code != 200 or not ok:
+            body = ""
+            try:
+                body = r.text[:300]
+            except Exception:
+                pass
+            print(f"[warn] Telegram API error (chunk {idx}/{len(parts)}): status={r.status_code}, ok={ok}, code={code}, desc={desc}, body={body}")
+        else:
+            if TELEGRAM_DEBUG:
+                print(f"[tg-debug] chunk {idx}/{len(parts)} delivered: ok={ok}")
+        time.sleep(0.2)
+
+
+def _to_fmt_speed(d):
+    try:
+        med_val = d.get("med", None)
+        med_txt = med_val if (med_val in (None, "", "NA")) else f"{int(float(med_val))}m"
+    except Exception:
+        med_txt = d.get("med", "-")
+    return {"xph": d.get("xph"), "med": med_txt, "edgeph": d.get("edgeph")}
+def _to_fmt_entry(d):
+    return {
+        "symbol": d.get("symbol"),
+        "last": d.get("last"),
+        "atr_abs": d.get("atr_abs"),
+        "atr_pct": d.get("atr_pct"),
+        "range_pct": d.get("range_pct"),
+        "adx": d.get("adx"),
+        "mid_cross": d.get("midcross") if ("midcross" in d) else d.get("mid_cross"),
+        "drift_pct": d.get("drift_ratio") if ("drift_ratio" in d) else d.get("drift_pct"),
+        "tags": (["PING-PONG OK"] if d.get("pingpong_ok") else d.get("why_tags", [])) + (["FAST S OK"] if d.get("fast_ok") else []),
+        "grid_low": d.get("grid_lower") if ("grid_lower" in d) else d.get("grid_low"),
+        "grid_high": d.get("grid_upper") if ("grid_upper" in d) else d.get("grid_high"),
+        "grid_lines": d.get("levels") if ("levels" in d) else d.get("grid_lines"),
+        "speed": _to_fmt_speed(d) if d.get("fast_checked") or d.get("speed") else d.get("speed", {}),
+    }
+
+
+# === HTML formatted summary (non-intrusive; runs after regular sends) ===
+try:
+    import time as _t
+    _pp = pp if 'pp' in globals() or 'pp' in locals() else None
+    _fast = fast_pp if 'fast_pp' in globals() or 'fast_pp' in locals() else None
+    _all = allres if 'allres' in globals() or 'allres' in locals() else None
+    s_behavior_fmt = _to_fmt_entry(_pp[0]) if (_pp and len(_pp)>0) else None
+    try_top_send = TOP_SEND if 'TOP_SEND' in globals() or 'TOP_SEND' in locals() else 10
+    try_top_fast = TOP_FAST if 'TOP_FAST' in globals() or 'TOP_FAST' in locals() else 5
+    top_fmt = [_to_fmt_entry(d) for d in (_all[:try_top_send] if _all else [])]
+    fast_fmt = [_to_fmt_entry(d) for d in (_fast[:try_top_fast] if _fast else [])]
+    if (s_behavior_fmt or top_fmt or fast_fmt):
+        _chunks = format_telegram_scan_message(
+            scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
+            s_behavior=s_behavior_fmt,
+            top_candidates=top_fmt,
+            fast_candidates=fast_fmt
+        )
+        for _ch in _chunks:
+            send_telegram(_ch, parse_mode="HTML", disable_preview=True)
+    else:
+        print("[info] HTML summary skipped (no data).")
+except Exception as _e:
+    print(f"[warn] HTML summary error: {_e}")
