@@ -1,0 +1,50 @@
+name: Reapply .gitignore
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Uygulama modu: pr (Pull Request) ya da push (doğrudan)"
+        required: true
+        default: "pr"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reapply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove cached files ignored by .gitignore
+        id: diff
+        run: |
+          git rm -r --cached . || true
+          git add .
+          if git diff --cached --quiet; then
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "no_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR with changes
+        if: steps.diff.outputs.no_changes == 'false' && inputs.mode == 'pr'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: reapply .gitignore rules"
+          title: "Reapply .gitignore rules"
+          body: "Automated refresh to drop tracked files now ignored."
+          branch: "chore/reapply-gitignore"
+
+      - name: Commit & push directly
+        if: steps.diff.outputs.no_changes == 'false' && inputs.mode == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: reapply .gitignore rules"
+          git push
