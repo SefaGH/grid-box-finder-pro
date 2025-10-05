@@ -2,6 +2,7 @@ import os, time, math, requests
 from typing import List, Dict, Any, Tuple
 
 import ccxt  # public-only BingX access via ccxt
+from formatting import format_telegram_scan_message
 
 # ---------------- ENV & CONSTANTS ----------------
 def _env_float(n: str, d: float) -> float:
@@ -326,6 +327,7 @@ def estimate_listing_age_days(exchange, symbol: str, market_info: Dict[str, Any]
 
 # ---------------- MAIN ----------------
 def main():
+    global pp, fast_pp, allres
     print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
@@ -508,8 +510,8 @@ def main():
                             float(x.get("med_n", 1e9)),
                            -float(x.get("range_pct", 0.0))),
         )[:TOP_FAST]
-        if fst:
-            send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))
+        if fst:# 
+            send_telegram("FAST S OK (wide & quick S)\n" + "\n".join([to_human(d) for d in fst]))  # disabled: HTML emitter handles this
     else:
         if TELEGRAM_ALWAYS_NEAR:
             send_telegram("FAST S OK (wide & quick S)\n(şu an eşleşme yok — filtreler sıkı)")
@@ -522,8 +524,8 @@ def main():
                            -float(x.get("edgeph_n", 0.0)),
                             float(x.get("med_n", 1e9)),
                            -float(x.get("range_pct", 0.0))),
-        )[:TOP_FAST]
-        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))
+        )[:TOP_FAST]# 
+        send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))  # disabled: HTML emitter handles this
     else:
         if TELEGRAM_ALWAYS_NEAR:
             send_telegram("PING-PONG OK (S davranışı teyitli)\n(şu an eşleşme yok — filtreler sıkı)")
@@ -612,3 +614,182 @@ def generate_grid_csv(d: dict, out_path: str) -> None:
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         cw = csv.writer(f)
         cw.writerows(rows)
+
+
+def send_telegram(msg: str, *, parse_mode: str = None, disable_preview: bool = True) -> None:
+    import os, requests, time
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
+    TELEGRAM_DEBUG = bool(str(os.environ.get("TELEGRAM_DEBUG", "")))
+    if not token or not chat_id:
+        print("[info] Telegram env yok; mesaj atılmadı.")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    HARD_LIMIT = 4096
+    SAFE = 560
+    LIM = HARD_LIMIT - SAFE
+    lines = msg.splitlines(keepends=True)
+    parts, buf, size = [], [], 0
+    for ln in lines:
+        if size + len(ln) > LIM and buf:
+            parts.append("".join(buf))
+            buf, size = [], 0
+        buf.append(ln)
+        size += len(ln)
+    if buf:
+        parts.append("".join(buf))
+    if not parts:
+        parts = [msg]
+    for idx, part in enumerate(parts, 1):
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": "true" if disable_preview else "false",
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if TELEGRAM_DEBUG:
+                preview = part.replace("\\n", " ")[:140]
+                print(f"[tg-debug] send chunk {idx}/{len(parts)} | len={len(part)} | parse_mode={parse_mode} | preview='{preview}…'")
+            r = requests.post(url, data=payload, timeout=20)
+            ok = False
+            try:
+                j = r.json()
+                ok = bool(j.get("ok", False))
+                if not ok and TELEGRAM_DEBUG:
+                    print("[warn] Telegram sendMessage error:", j)
+            except Exception:
+                if TELEGRAM_DEBUG:
+                    print("[warn] Telegram sendMessage non-JSON:", r.text[:200])
+        except Exception as e:
+            print(f"[warn] Telegram exception (chunk {idx}/{len(parts)}): {e}")
+        time.sleep(0.2)
+
+
+def _to_fmt_speed(d):
+    try:
+        med_val = d.get("med", None)
+        med_txt = med_val if (med_val in (None, "", "NA")) else f"{int(float(med_val))}m"
+    except Exception:
+        med_txt = d.get("med", "-")
+    return {"xph": d.get("xph"), "med": med_txt, "edgeph": d.get("edgeph")}
+
+def _to_fmt_entry(d):
+    sym = d.get("symbol")
+    try:
+        if isinstance(sym, str) and sym.endswith(":USDT"):
+            sym = sym[:-6]
+    except Exception:
+        pass
+    return {
+        "symbol": sym,
+        "last": d.get("last"),
+        "atr_abs": d.get("atr_abs"),
+        "atr_pct": d.get("atr_pct"),
+        "range_pct": d.get("range_pct"),
+        "adx": d.get("adx"),
+        "mid_cross": d.get("midcross") if ("midcross" in d) else d.get("mid_cross"),
+        "drift_pct": d.get("drift_ratio") if ("drift_ratio" in d) else d.get("drift_pct"),
+        "tags": (["PING-PONG OK"] if d.get("pingpong_ok") else d.get("why_tags", [])) + (["FAST S OK"] if d.get("fast_ok") else []),
+        "grid_low": d.get("grid_lower") if ("grid_lower" in d) else d.get("grid_low"),
+        "grid_high": d.get("grid_upper") if ("grid_upper" in d) else d.get("grid_high"),
+        "grid_lines": d.get("levels") if ("levels" in d) else d.get("grid_lines"),
+        "speed": _to_fmt_speed(d) if d.get("fast_checked") or d.get("speed") else d.get("speed", {}),
+    }
+
+
+def emit_html_and_csv(pp, fast_pp, allres) -> None:
+    import os, requests
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    print("[v4] HTML+CSV emitter running")
+
+    s_behavior = _to_fmt_entry(pp[0]) if (pp and len(pp) > 0) else None
+
+    try_top_send = int(os.environ.get("TOP_SEND", "5") or "5")
+    _top_copy = list(allres) if allres else []
+    try:
+        _top_copy.sort(key=lambda d: float(d.get("drift_ratio", d.get("drift_pct", 0.0)) or 0.0))
+    except Exception:
+        pass
+    try:
+        _top_copy = [d for d in _top_copy if float(d.get("range_pct") or 0.0) >= 0.10]
+    except Exception:
+        pass
+    top_fmt = [_to_fmt_entry(d) for d in (_top_copy[:try_top_send] if _top_copy else [])]
+
+    try_top_fast = int(os.environ.get("TOP_FAST", "3") or "3")
+    _fast_max = min(3, try_top_fast)
+    fast_fmt = [_to_fmt_entry(d) for d in (fast_pp[:_fast_max] if fast_pp else [])]
+
+    ts = datetime.now(ZoneInfo("Europe/Istanbul")).strftime("%Y-%m-%d %H:%M")
+
+    last_mid = None
+    if fast_fmt:
+        chunks_fast = format_telegram_scan_message(
+            scan_started_at=ts,
+            s_behavior=None,
+            top_candidates=[],
+            fast_candidates=fast_fmt,
+        )
+        token = os.environ.get("TELEGRAM_BOT_TOKEN") or ""
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID") or ""
+        if token and chat_id:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            for ch in chunks_fast:
+                try:
+                    r = requests.post(url, data={"chat_id": chat_id, "text": ch, "parse_mode": "HTML", "disable_web_page_preview": "true"}, timeout=20)
+                    j = r.json()
+                    if j.get("ok", False):
+                        last_mid = j["result"]["message_id"]
+                    else:
+                        print("[warn] FAST send error:", j)
+                except Exception as e:
+                    print("[warn] FAST send exception:", e)
+        else:
+            for ch in chunks_fast:
+                send_telegram(ch, parse_mode="HTML", disable_preview=True)
+
+        if last_mid and str(os.environ.get("TELEGRAM_PIN_FAST", "")).strip():
+            try:
+                pin_last_message(last_mid)
+            except Exception as e:
+                print("[warn] pin exception:", e)
+
+    if s_behavior or top_fmt:
+        chunks = format_telegram_scan_message(
+            scan_started_at=ts,
+            s_behavior=s_behavior,
+            top_candidates=top_fmt,
+            fast_candidates=None,
+        )
+        for ch in chunks:
+            send_telegram(ch, parse_mode="HTML", disable_preview=True)
+
+    if s_behavior and str(os.environ.get("SEND_GRID_CSV", "1")).strip():
+        try:
+            src_dict = pp[0] if (pp and len(pp) > 0) else None
+            if src_dict:
+                tmp = "/tmp/grid.csv"
+                generate_grid_csv(src_dict, tmp)
+                send_document(tmp, caption=f"<b>Grid CSV</b> — {s_behavior.get('symbol','?')}", parse_mode="HTML")
+        except Exception as e:
+            print("[warn] grid.csv send exception:", e)
+
+
+# === HTML/CSV emitter: unconditional at end of main ===
+def _run_emitter_guard():
+    try:
+        emit_html_and_csv(pp if 'pp' in globals() or 'pp' in locals() else [],
+                          fast_pp if 'fast_pp' in globals() or 'fast_pp' in locals() else [],
+                          allres if 'allres' in globals() or 'allres' in locals() else [])
+    except Exception as e:
+        print("[warn] emitter guard error:", e)
+
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        _run_emitter_guard()
