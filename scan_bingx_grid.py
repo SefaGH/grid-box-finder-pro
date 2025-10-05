@@ -1,6 +1,12 @@
 import os, time, math, requests
 from typing import List, Dict, Any, Tuple
 
+# --- Defensive guard: ensure TELEGRAM_HEALTH_PING is defined ---
+import os as _os
+if 'TELEGRAM_HEALTH_PING' not in globals():
+    TELEGRAM_HEALTH_PING = str(_os.environ.get('TELEGRAM_HEALTH_PING', '0')).strip().lower() in ('1','true','yes')
+# ----------------------------------------------------------------
+
 import ccxt  # public-only BingX access via ccxt
 from formatting import format_telegram_scan_message
 
@@ -9,14 +15,6 @@ def _env_float(n: str, d: float) -> float:
     try:
         v = os.environ.get(n, "")
         return float(v) if v not in ("", None) else d
-
-# --- Defensive guard: ensure TELEGRAM_HEALTH_PING is defined ---
-try:
-    TELEGRAM_HEALTH_PING  # may be defined above
-except NameError:
-    import os as _os
-    TELEGRAM_HEALTH_PING = str(_os.environ.get("TELEGRAM_HEALTH_PING", "0")).strip().lower() in ("1","true","yes")
-# ----------------------------------------------------------------
     except Exception:
         return d
 
@@ -72,6 +70,7 @@ TOP_SEND = _env_int("TOP_SEND", 12)
 
 # Optional Telegram knobs
 TELEGRAM_ALWAYS_NEAR = str(os.environ.get("TELEGRAM_ALWAYS_NEAR", "0")).strip().lower() in ("1","true","yes")
+TELEGRAM_HEALTH_PING = str(os.environ.get("TELEGRAM_HEALTH_PING", "0")).strip().lower() in ("1","true","yes")
 TELEGRAM_DEBUG       = str(os.environ.get("TELEGRAM_DEBUG", "0")).strip().lower() not in ("", "0", "false", "no")
 
 # ---------------- HELPERS ----------------
@@ -338,7 +337,7 @@ def main():
     print("== BingX Grid Scan — Fast S mode ==")
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
-    if False:
+    if TELEGRAM_HEALTH_PING:
         send_telegram("🟢 Scanner up — starting scan")
 
     markets = ex.load_markets()
@@ -647,17 +646,6 @@ try:
     top_fmt = [_to_fmt_entry(d) for d in (_all[:try_top_send] if _all else [])]
     fast_fmt = [_to_fmt_entry(d) for d in (_fast[:try_top_fast] if _fast else [])]
     if (s_behavior_fmt or top_fmt or fast_fmt):
-
-# ... try: bloğu içinde, _chunks oluşturduğun satırdan hemen önce
-    _title = "" if TELEGRAM_HEALTH_PING else "🟢 Scanner Up — Starting Scan"
-    _chunks = format_telegram_scan_message(
-    scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
-    s_behavior=s_behavior_fmt,
-    top_candidates=top_fmt,
-    fast_candidates=fast_fmt,
-    title_scanner=_title,
-)
-
         _chunks = format_telegram_scan_message(
             scan_started_at=_t.strftime("%Y-%m-%d %H:%M"),
             s_behavior=s_behavior_fmt,
