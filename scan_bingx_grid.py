@@ -332,8 +332,8 @@ def main():
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
 
     if TELEGRAM_HEALTH_PING:
-        send_telegram("🟢 Scanner up — starting scan")
-
+#         send_telegram("🟢 Scanner up — starting scan")
+  # disabled by minimal-fix
     markets = ex.load_markets()
     symbols = [s for s, m in markets.items() if m.get("contract") and m.get("quote") == "USDT"]
     if not symbols:
@@ -528,16 +528,14 @@ def main():
         send_telegram("PING-PONG OK (S davranışı teyitli)\n" + "\n".join([to_human(d) for d in pps]))  # disabled: HTML emitter handles this
     else:
         if TELEGRAM_ALWAYS_NEAR:
-            send_telegram("PING-PONG OK (S davranışı teyitli)\n(şu an eşleşme yok — filtreler sıkı)")
-
+#             send_telegram("PING-PONG OK (S davranışı teyitli)\n(şu an eşleşme yok — filtreler sıkı)")
+  # disabled by minimal-fix
     # 2.3 Top candidates (after hard caps and ranking)
     header = "BingX Grid Scan Sonuçları (Top adaylar)\n"
     lines = [to_human(d) for d in allres[:TOP_SEND]]
     send_telegram(header + ("\n".join(lines) if lines else "(Aday bulunamadı)"))
     print("\n" + header + ("\n".join(lines) if lines else "(Aday bulunamadı)") + "\n")
 
-if __name__ == "__main__":
-    main()
 
 
 
@@ -793,6 +791,7 @@ def _run_emitter_guard():
                           allres if 'allres' in globals() or 'allres' in locals() else [])
     except Exception as e:
         print("[warn] emitter guard error:", e)
+
 
 if __name__ == "__main__":
     try:
