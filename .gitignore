@@ -1,0 +1,59 @@
+# === Python build / cache ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+build/
+dist/
+
+# === Virtual environments ===
+.venv/
+env/
+venv/
+ENV/
+
+# === Logs and temp files ===
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+*.iml
+
+# === System / OS ===
+*.orig
+*~
+*.cache
+*.lock
+
+# === GitHub workflow artifacts ===
+.github/workflows/*.bak
+.github/workflows/*.tmp
+.github/workflows/*.yml.old
+
+# === Bot runtime artifacts ===
+logs/
+output/
+data/
+tmp/
+cache/
+*.csv
+*.xlsx
+*.json
+*.txt
+
+# === Do NOT ignore the main scripts ===
+!scan_bingx_grid.py
+!formatting.py
+!requirements.txt
+!telegram_notify.py
+!scripts/
+!.github/
