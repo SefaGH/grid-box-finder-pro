@@ -43,7 +43,11 @@ class DynamicGrid:
             return
         self._last_tune = now
 
-  # grid_sizer ile borsa kurallı grid üret
+        # alt-üst bant hesapla
+        lower, upper = self._compute_band(closes)
+
+        # grid planını oluştur
+        from grid_sizer import compute_grid_inline
         plan = compute_grid_inline(
             symbol=symbol,
             lower=lower,
@@ -55,12 +59,13 @@ class DynamicGrid:
             exchange=self.ex.ex
         )
 
-        # risk kontrolü (toplam notional)
+        # risk kontrolü
         total_plan = sum(x['notional'] for x in plan) if plan else 0.0
         if not self.risk.check_order(symbol, total_plan):
+            print("[RISK] Plan toplam notional sınırını aşıyor, grid kurulmadı.")
             return
 
-        # önce eskileri iptal et
+        # eski emirleri iptal et
         self.ex.cancel_all_orders(symbol)
 
         # emirleri yerleştir
