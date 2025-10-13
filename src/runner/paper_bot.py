@@ -5,6 +5,7 @@ from src.core.state_store import JsonState
 from src.strategy.dynamic_grid import DynamicGrid, GridParams
 from src.strategy.strategist import pick_mode
 from src.strategy.tri_arb import TriArb
+from src.strategy.metrics_feed import build_metrics
 
 def main():
     api_key = os.environ.get('BINGX_API_KEY', '')
@@ -36,20 +37,17 @@ def main():
 
     closes = [30000.0] * 50
     while True:
-        t = ex.fetch_ticker(symbol)
-        closes.append(t['last'])
-        closes = closes[-200:]
-
-        metrics = {'adx': 18.0, 'crosses_per_hour': 8, 'touches_per_hour': 10, 'liquidity_ok': True}
-        tri_edge = 0.0
+        metrics = build_metrics(ex, symbol)
+        tri_edge = 0.0  # tri_arb calc kenarda; sonra bağlayacağız
         mode = pick_mode(metrics, tri_edge)
 
         if mode == 'DYNAMIC_GRID':
+            closes = metrics["closes"]
             dg.retune_and_place(symbol, closes)
         elif mode == 'TRI_ARB':
             pass
 
-        time.sleep(5)
+        time.sleep(10)    
 
 if __name__ == '__main__':
     main()
