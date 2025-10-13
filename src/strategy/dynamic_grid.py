@@ -6,6 +6,7 @@ from src.core.exchange_ccxt import ExchangeCCXT
 from src.core.risk import RiskGate, RiskLimits
 from src.core.state_store import JsonState
 from src.core.indicators import atr, stddev
+from grid_sizer import compute_grid_inline
 
 @dataclass
 class GridParams:
@@ -42,17 +43,26 @@ class DynamicGrid:
             return
         self._last_tune = now
 
-        lower, upper = self._compute_band(closes)
-        prices = self._grid_prices(lower, upper, self.params.levels)
+  # grid_sizer ile borsa kurallı grid üret
+        plan = compute_grid_inline(
+            symbol=symbol,
+            lower=lower,
+            upper=upper,
+            levels=self.params.levels,
+            capital=self.params.capital,
+            reserve=0.05,
+            lev=1,
+            exchange=self.ex.ex
+        )
 
-        notional_per = self.params.capital / max(1,len(prices))
-        last = closes[-1]
+        # risk kontrolü (toplam notional)
+        total_plan = sum(x['notional'] for x in plan) if plan else 0.0
+        if not self.risk.check_order(symbol, total_plan):
+            return
 
-        # Basit yerleştirme (örnek): last altına alım, üstüne satım
+        # önce eskileri iptal et
         self.ex.cancel_all_orders(symbol)
-        for p in prices:
-            qty = max(1e-6, notional_per / last)
-            if p < last:
-                self.ex.create_order(symbol, 'buy', 'limit', qty, p)
-            elif p > last:
-                self.ex.create_order(symbol, 'sell', 'limit', qty, p)
+
+        # emirleri yerleştir
+        for line in plan:
+            self.ex.create_order(symbol, line['side'], 'limit', line['qty'], line['price'])
