@@ -246,6 +246,41 @@ def main() -> None:
                 w.writerow(o)
         print(f"\nCSV yazıldı: {args.csv}")
 
+def compute_grid_inline(symbol: str, lower: float, upper: float, levels: int,
+                        capital: float, reserve: float = 0.05, lev: int = 1,
+                        exchange=None):
+    """
+    grid_sizer.py'nin CLI mantığını programatik çağrı ile kullanmamızı sağlar.
+    Dönüş: [{'side': 'buy'/'sell', 'price': float, 'qty': float, 'notional': float}, ...]
+    """
+    import ccxt, math
+    ex = exchange or ccxt.bingx()
+    ex.options['defaultType'] = 'swap'
+    markets = ex.load_markets()
+    m = markets[symbol]
+    tick = m['precision']['price']
+    lot = m['precision']['amount']
+    min_notional = m.get('limits', {}).get('cost', {}).get('min', 0.0) or 0.0
+
+    step = (upper - lower) / max(1, levels - 1)
+    prices = [lower + i * step for i in range(levels)]
+
+    # eşit-quote dağıt
+    per = capital * (1 - reserve) / max(1, levels)
+    out = []
+    last = ex.fetch_ticker(symbol)['last']
+    for p in prices:
+        side = 'buy' if p < last else ('sell' if p > last else None)
+        if not side:
+            continue
+        qty = max(10**-8, per / p)
+        # Basit yuvarlama (precision), min_notional kontrolü:
+        notional = p * qty
+        if min_notional and notional < min_notional:
+            continue
+        out.append({'side': side, 'price': p, 'qty': qty, 'notional': notional})
+    return out
+
 
 if __name__ == "__main__":
     main()
