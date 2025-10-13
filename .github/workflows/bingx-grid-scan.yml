@@ -2,7 +2,7 @@ name: BingX Grid Scan
 
 on:
   schedule:
-    - cron: '12 * * * *'   # her saat :12'de
+    - cron: '12 * * * *'   # her saat xx:12'de
   workflow_dispatch: {}
 
 concurrency:
@@ -13,56 +13,55 @@ jobs:
   run-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      TZ: Europe/Istanbul
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install ccxt requests
-          fi
+      - name: Install deps
+        run: pip install -r requirements.txt
 
-      - name: Run BingX Grid Scan (rich-only)
+      - name: Run scanner
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          # --- Scan parametreleri (VARS) ---
+          TOP_K:                   ${{ vars.TOP_K || 80 }}
+          ATR_PCT_MIN:             ${{ vars.ATR_PCT_MIN || 0.0025 }}
+          RANGE_PCT_MIN:           ${{ vars.RANGE_PCT_MIN || 0.015 }}
+          ADX_MAX:                 ${{ vars.ADX_MAX || 13 }}
+          MID_CROSS_MIN:           ${{ vars.MID_CROSS_MIN || 18 }}
+          DRIFT_MAX_RATIO:         ${{ vars.DRIFT_MAX_RATIO || 0.15 }}
 
-          # Algoritma parametreleri (opsiyonel; vars.* tanımlı değilse boş gider)
-          TOP_K:               ${{ vars.TOP_K }}
-          ATR_PCT_MIN:         ${{ vars.ATR_PCT_MIN }}
-          RANGE_PCT_MIN:       ${{ vars.RANGE_PCT_MIN }}
-          ADX_MAX:             ${{ vars.ADX_MAX }}
-          MID_CROSS_MIN:       ${{ vars.MID_CROSS_MIN }}
-          DRIFT_MAX_RATIO:     ${{ vars.DRIFT_MAX_RATIO }}
-          MIN_QVOL_USDT:       ${{ vars.MIN_QVOL_USDT }}
-          LISTED_MIN_DAYS:     ${{ vars.LISTED_MIN_DAYS }}
-          MIN_GRID_K_ATR:      ${{ vars.MIN_GRID_K_ATR }}
-          FAST_S_MODE:             ${{ vars.FAST_S_MODE }}
-          FAST_TF:                 ${{ vars.FAST_TF }}
-          FAST_LIMIT:              ${{ vars.FAST_LIMIT }}
-          MIN_CROSSES_PER_HOUR:    ${{ vars.MIN_CROSSES_PER_HOUR }}
-          CYCLE_MIN_MIN:           ${{ vars.CYCLE_MIN_MIN }}
-          CYCLE_MAX_MIN:           ${{ vars.CYCLE_MAX_MIN }}
-          MIN_EDGE_TOUCHES_PH:     ${{ vars.MIN_EDGE_TOUCHES_PH }}
-          WIDE_MIN_RANGE_PCT:      ${{ vars.WIDE_MIN_RANGE_PCT }}
-          TOP_FAST:                ${{ vars.TOP_FAST }}
-          TOP_SEND:                ${{ vars.TOP_SEND }}
-          TOP_ADX_HARD_MAX:        ${{ vars.TOP_ADX_HARD_MAX }}
-          TOP_DRIFT_HARD_MAX:      ${{ vars.TOP_DRIFT_HARD_MAX }}
-          FAST_REQUIRE_PINGPONG:   ${{ vars.FAST_REQUIRE_PINGPONG }}
-          TELEGRAM_DEBUG:          ${{ vars.TELEGRAM_DEBUG }}
-          TELEGRAM_HEALTH_PING:    ${{ vars.TELEGRAM_HEALTH_PING || '0' }}
+          MIN_QVOL_USDT:           ${{ vars.MIN_QVOL_USDT || 1000000 }}
+          LISTED_MIN_DAYS:         ${{ vars.LISTED_MIN_DAYS || 30 }}
+          MIN_GRID_K_ATR:          ${{ vars.MIN_GRID_K_ATR || 1.0 }}
+
+          FAST_S_MODE:             ${{ vars.FAST_S_MODE || 1 }}
+          FAST_TF:                 ${{ vars.FAST_TF || '1m' }}
+          FAST_LIMIT:              ${{ vars.FAST_LIMIT || 360 }}
+          MIN_CROSSES_PER_HOUR:    ${{ vars.MIN_CROSSES_PER_HOUR || 10 }}
+          CYCLE_MIN_MIN:           ${{ vars.CYCLE_MIN_MIN || 5 }}
+          CYCLE_MAX_MIN:           ${{ vars.CYCLE_MAX_MIN || 35 }}
+          MIN_EDGE_TOUCHES_PH:     ${{ vars.MIN_EDGE_TOUCHES_PH || 6 }}
+          WIDE_MIN_RANGE_PCT:      ${{ vars.WIDE_MIN_RANGE_PCT || 0.04 }}
+
+          TOP_ADX_HARD_MAX:        ${{ vars.TOP_ADX_HARD_MAX || 30 }}
+          TOP_DRIFT_HARD_MAX:      ${{ vars.TOP_DRIFT_HARD_MAX || 0.70 }}
+          FAST_NEAR_MIN_XPH:       ${{ vars.FAST_NEAR_MIN_XPH || 18 }}
+          FAST_REQUIRE_PINGPONG:   ${{ vars.FAST_REQUIRE_PINGPONG || 1 }}
+
+          TOP_FAST:                ${{ vars.TOP_FAST || 12 }}
+          TOP_SEND:                ${{ vars.TOP_SEND || 12 }}
+
+          TELEGRAM_DEBUG:          ${{ vars.TELEGRAM_DEBUG || 0 }}
+          TELEGRAM_HEALTH_PING:    ${{ vars.TELEGRAM_HEALTH_PING || 0 }}
+
+          # --- Telegram (SECRETS) ---
+          TELEGRAM_TOKEN:          ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
 
         run: |
           python scan_bingx_grid.py
