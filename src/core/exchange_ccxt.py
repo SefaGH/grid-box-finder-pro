@@ -1,6 +1,4 @@
 import os
-
-import time
 from typing import Any, Dict, List, Optional
 
 import ccxt
@@ -45,12 +43,15 @@ class ExchangeCCXT:
 
     def create_order(self, symbol: str, side: str, type_: str, amount: float, price: Optional[float] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params = params or {}
+        if os.environ.get("DRY_RUN", "0") == "1":
+            print(f"[DRY_RUN] create_order {symbol} {side} {type_} qty={amount} price={price}")
+            return {"id": "dry-run", "status": "mocked"}
         return self._rl_wrap(self.ex.create_order, symbol, type_, side, amount, price, params)
 
-    def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
-        return self._rl_wrap(self.ex.cancel_order, order_id, symbol)
-
     def cancel_all_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        if os.environ.get("DRY_RUN", "0") == "1":
+            print(f"[DRY_RUN] cancel_all_orders symbol={symbol}")
+            return []
         open_ = self.fetch_open_orders(symbol)
         out = []
         for o in open_:
