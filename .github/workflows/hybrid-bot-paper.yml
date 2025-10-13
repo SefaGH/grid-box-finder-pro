@@ -1,0 +1,54 @@
+name: Hybrid Bot Paper (Dynamic Grid + Strategist)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: hybrid-bot-paper
+  cancel-in-progress: true
+
+jobs:
+  run-paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run paper bot
+        env:
+          # --- Exchange Secrets ---
+          BINGX_API_KEY:           ${{ secrets.BINGX_API_KEY }}
+          BINGX_API_SECRET:        ${{ secrets.BINGX_API_SECRET }}
+
+          # --- Symbol & Grid Vars ---
+          SYMBOL:                  ${{ vars.SYMBOL || 'BTC/USDT:USDT' }}
+          GRID_LEVELS:             ${{ vars.GRID_LEVELS || 16 }}
+          GRID_CAPITAL:            ${{ vars.GRID_CAPITAL || 200 }}
+          ATR_K:                   ${{ vars.ATR_K || 1.2 }}
+          RETUNE_SEC:              ${{ vars.RETUNE_SEC || 120 }}
+
+          # --- Risk Vars ---
+          MAX_OPEN_NOTIONAL:       ${{ vars.MAX_OPEN_NOTIONAL || 1000 }}
+          MAX_SYMBOL_EXPOSURE:     ${{ vars.MAX_SYMBOL_EXPOSURE || 500 }}
+          DAILY_MAX_LOSS:          ${{ vars.DAILY_MAX_LOSS || 200 }}
+          STOP_PCT:                ${{ vars.STOP_PCT || 0.03 }}
+
+          # --- Tri-Arb Vars (şimdilik opsiyonel) ---
+          FEE:                     ${{ vars.FEE || 0.0006 }}
+          TRI_EDGE_MIN:            ${{ vars.TRI_EDGE_MIN || 0.0015 }}
+
+          # --- (opsiyonel) Bildirim ---
+          TELEGRAM_TOKEN:          ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
+
+        run: |
+          python -m src.runner.paper_bot
