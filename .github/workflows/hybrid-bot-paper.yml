@@ -50,6 +50,11 @@ jobs:
           TELEGRAM_TOKEN:          ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
 
+          ADX_LIMIT: 28
+          VOL_SPIKE_FAST: 20
+          VOL_SPIKE_SLOW: 120
+          VOL_SPIKE_MULT: 2.0
+
           DRY_RUN:                 1 
         run: |
           python -m src.runner.paper_bot
