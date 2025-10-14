@@ -34,20 +34,19 @@ def main():
         retune_sec=int(os.environ.get('RETUNE_SEC','120'))
     ))
 
-    tri = TriArb(ex, fee_rate=float(os.environ.get('FEE','0.0006')), edge_min=float(os.environ.get('TRI_EDGE_MIN','0.0015')))
+    tri = TriArb(ex, fee_rate=float(os.environ.get('FEE','0.0006')),
+                    edge_min=float(os.environ.get('TRI_EDGE_MIN','0.0015')))
 
-    closes = [30000.0] * 50
     while True:
-        metrics['adx'] = adx_val
-        tri_edge = 0.0  # tri_arb calc kenarda; sonra bağlayacağız
-        # --- GUARDS ---
-        # 1) ADX (trend break) – 1m OHLCV ile kabaca ölç
-        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)
+        # 1) Metrikleri üret
+        metrics = build_metrics(ex, symbol)  # crosses/touches + closes
+        closes = metrics.get("closes", [])
+
+        # 2) Guards: ADX & spike (1m ohlcv)
+        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)  # [ts,o,h,l,c,v]
         ohlc4 = [(row[1], row[2], row[3], row[4]) for row in ohlc]
         adx_val = adx14(ohlc4)
-
-        # 2) Volatilite spike – hızlı/yavaş std oranı
-        closes_full = [row[4] for row in ohlc]  # son 120 close
+        closes_full = [row[4] for row in ohlc]
         spike = volatility_spike(
             closes_full,
             win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
@@ -55,20 +54,24 @@ def main():
             mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0'))
         )
 
+        metrics['adx'] = adx_val  # strateji seçicide kullanılacak
+
         if adx_val >= float(os.environ.get('ADX_LIMIT', '28')) or spike:
             print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
             ex.cancel_all_orders(symbol)
             time.sleep(10)
             continue
+
+        # 3) Strateji seçimi ve yürütme (DRY_RUN logları aktif)
+        tri_edge = 0.0  # tri_arb kenarda; edge hesaplayıp geçişe bağlayacağız
         mode = pick_mode(metrics, tri_edge)
 
-        if mode == 'DYNAMIC_GRID':
-            closes = metrics["closes"]
+        if mode == 'DYNAMIC_GRID' and closes:
             dg.retune_and_place(symbol, closes)
         elif mode == 'TRI_ARB':
-            pass
+            pass  # tri.try_execute(...) bağlanacak
 
-        time.sleep(10)    
+        time.sleep(10)
 
 if __name__ == '__main__':
     main()
