@@ -46,6 +46,17 @@ def main():
     tri = TriArb(ex, fee_rate=float(os.environ.get('FEE','0.0006')),
                     edge_min=float(os.environ.get('TRI_EDGE_MIN','0.0015')))
 
+        # --- GUARD AYARLARI (env'den okunur) ---
+    ADX_LIMIT_HI = float(os.environ.get('ADX_LIMIT_HI', '35'))
+    ADX_LIMIT_LO = float(os.environ.get('ADX_LIMIT_LO', '28'))
+    GUARD_COOLDOWN_SEC = int(os.environ.get('GUARD_COOLDOWN_SEC', '60'))
+    GUARD_CONSEC_N = int(os.environ.get('GUARD_CONSEC_N', '3'))
+
+    # --- GUARD DURUM DEĞİŞKENLERİ (lokal init) ---
+    trend_blocked = False
+    last_guard_ts = 0.0
+    guard_hits = 0
+
     while True:
         # 1) Metrikleri üret
         metrics = build_metrics(ex, symbol)  # crosses/touches + closes
