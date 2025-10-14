@@ -8,14 +8,6 @@ from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
 
-ADX_LIMIT_HI = float(os.environ.get('ADX_LIMIT_HI', '35'))
-ADX_LIMIT_LO = float(os.environ.get('ADX_LIMIT_LO', '28'))
-GUARD_COOLDOWN_SEC = int(os.environ.get('GUARD_COOLDOWN_SEC', '60'))
-GUARD_CONSEC_N     = int(os.environ.get('GUARD_CONSEC_N', '3'))
-
-trend_blocked = False
-last_guard_ts = 0
-guard_hits = 0
 
 def main():
     api_key = os.environ.get('BINGX_API_KEY', '')
@@ -28,41 +20,59 @@ def main():
     ex.load_markets()
 
     limits = RiskLimits(
-        max_open_notional=float(os.environ.get('MAX_OPEN_NOTIONAL','1000')),
-        max_symbol_exposure=float(os.environ.get('MAX_SYMBOL_EXPOSURE','500')),
-        daily_max_loss=float(os.environ.get('DAILY_MAX_LOSS','200')),
-        stop_pct=float(os.environ.get('STOP_PCT','0.03'))
+        max_open_notional=float(os.environ.get('MAX_OPEN_NOTIONAL', '1000')),
+        max_symbol_exposure=float(os.environ.get('MAX_SYMBOL_EXPOSURE', '500')),
+        daily_max_loss=float(os.environ.get('DAILY_MAX_LOSS', '200')),
+        stop_pct=float(os.environ.get('STOP_PCT', '0.03')),
     )
     risk = RiskGate(limits)
     state = JsonState('state.paper.json')
 
-    dg = DynamicGrid(ex, risk, state, GridParams(
-        levels=int(os.environ.get('GRID_LEVELS','16')),
-        capital=float(os.environ.get('GRID_CAPITAL','200')),
-        atr_k=float(os.environ.get('ATR_K','1.2')),
-        retune_sec=int(os.environ.get('RETUNE_SEC','120'))
-    ))
+    dg = DynamicGrid(
+        ex, risk, state,
+        GridParams(
+            levels=int(os.environ.get('GRID_LEVELS', '16')),
+            capital=float(os.environ.get('GRID_CAPITAL', '200')),
+            atr_k=float(os.environ.get('ATR_K', '1.2')),
+            retune_sec=int(os.environ.get('RETUNE_SEC', '120')),
+        ),
+    )
 
-    tri = TriArb(ex, fee_rate=float(os.environ.get('FEE','0.0006')),
-                    edge_min=float(os.environ.get('TRI_EDGE_MIN','0.0015')))
+    tri = TriArb(
+        ex,
+        fee_rate=float(os.environ.get('FEE', '0.0006')),
+        edge_min=float(os.environ.get('TRI_EDGE_MIN', '0.0015')),
+    )
 
-        # --- GUARD AYARLARI (env'den okunur) ---
+    # --- Guard konfig (env) ---
     ADX_LIMIT_HI = float(os.environ.get('ADX_LIMIT_HI', '35'))
     ADX_LIMIT_LO = float(os.environ.get('ADX_LIMIT_LO', '28'))
     GUARD_COOLDOWN_SEC = int(os.environ.get('GUARD_COOLDOWN_SEC', '60'))
     GUARD_CONSEC_N = int(os.environ.get('GUARD_CONSEC_N', '3'))
 
-    # --- GUARD DURUM DEĞİŞKENLERİ (lokal init) ---
+    # --- Guard durum değişkenleri ---
     trend_blocked = False
     last_guard_ts = 0.0
     guard_hits = 0
 
     while True:
-        # 1) Metrikleri üret
-        metrics = build_metrics(ex, symbol)  # crosses/touches + closes
+        # 1) Metrikler (crosses/touches + son kapanışlar)
+        metrics = build_metrics(ex, symbol)
         closes = metrics.get("closes", [])
 
-        # 2) Guards: ADX & spike (1m ohlcv)
+        # 2) ADX & spike için 1m OHLCV çek ve hesapla
+        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)  # [ts,o,h,l,c,v]
+        ohlc4 = [(row[1], row[2], row[3], row[4]) for row in ohlc]
+        adx_val = adx14(ohlc4)
+        closes_full = [row[4] for row in ohlc]
+        spike = volatility_spike(
+            closes_full,
+            win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
+            win_slow=int(os.environ.get('VOL_SPIKE_SLOW', '120')),
+            mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0')),
+        )
+
+        # 3) Guard/histerezis + cooldown/debounce
         now_ts = time.time()
 
         # Histerezisli trend bloğu
@@ -74,12 +84,6 @@ def main():
                 trend_blocked = True
 
         # Hits sayacı
-        spike = volatility_spike(
-            closes_full,
-            win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
-            win_slow=int(os.environ.get('VOL_SPIKE_SLOW', '120')),
-            mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0'))
-        )
         if trend_blocked or spike:
             guard_hits += 1
         else:
@@ -95,30 +99,21 @@ def main():
             time.sleep(10)
             continue
 
-        if adx_val >= float(os.environ.get('ADX_LIMIT', '28')) or spike:
-            print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
-            ex.cancel_all_orders(symbol)
-            time.sleep(10)
-            continue
+        # 4) Strateji seçimi ve yürütme
+        metrics['adx'] = adx_val  # pick_mode için
+        # Tri-arb gözlem (istersen hesaplayıp moda dahil edebilirsin)
+        tri_edge = 0.0
+        # tri_edge = tri.calc_edge('BTC/USDT:USDT','ETH/USDT:USDT','BTC/ETH')
 
-        # Tri-arb gözlem (örnek üçlü)
-        tri_pairs = ('BTC/USDT:USDT', 'ETH/USDT:USDT', 'BTC/ETH')  # BTC->ETH->USDT->BTC tarzı için mantıksal yön gerekir
-        try:
-            tri_edge = 0.0
-            # tri_edge = tri.calc_edge(*tri_pairs)  # istersen aktif et
-        except Exception as e:
-            tri_edge = 0.0
-
-        # 3) Strateji seçimi ve yürütme (DRY_RUN logları aktif)
-        tri_edge = 0.0  # tri_arb kenarda; edge hesaplayıp geçişe bağlayacağız
         mode = pick_mode(metrics, tri_edge)
 
         if mode == 'DYNAMIC_GRID' and closes:
             dg.retune_and_place(symbol, closes)
         elif mode == 'TRI_ARB':
-            pass  # tri.try_execute(...) bağlanacak
+            pass  # ileride tri.try_execute(...) bağlanacak
 
         time.sleep(10)
+
 
 if __name__ == '__main__':
     main()
