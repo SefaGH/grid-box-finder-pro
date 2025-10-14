@@ -50,6 +50,7 @@ jobs:
           # 👇 ADX histerezis değerlerini Variables'tan al
           ADX_LIMIT_HI:            ${{ vars.ADX_LIMIT_HI || 35 }}
           ADX_LIMIT_LO:            ${{ vars.ADX_LIMIT_LO || 28 }}
+          ADX_LIMIT:               ${{ vars.ADX_LIMIT || '' }}
 
           # 👇 Guard/tuning parametreleri (istersen vars’a ekleyebilirsin)
           GUARD_COOLDOWN_SEC:      ${{ vars.GUARD_COOLDOWN_SEC || 60 }}
