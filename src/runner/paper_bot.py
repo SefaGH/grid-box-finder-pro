@@ -27,25 +27,6 @@ def main():
     risk = RiskGate(limits)
     state = JsonState('state.paper.json')
 
-            # --- GUARDS ---
-        # 1) ADX (trend break) – 1m OHLCV ile kabaca ölç
-        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)
-        ohlc4 = [(o,h,l,c) for _,o,h,l,c,_ in []]  # placeholder; ccxt dönerken [ts,o,h,l,c,v]
-        ohlc4 = [(row[1],row[2],row[3],row[4]) for row in ohlc]
-        adx_val = adx14(ohlc4)
-
-        # 2) Volatilite spike – hızlı/yavaş std oranı
-        closes_full = [row[4] for row in ohlc]  # son 120 close
-        spike = volatility_spike(closes_full, win_fast= int(os.environ.get('VOL_SPIKE_FAST','20')),
-                                              win_slow= int(os.environ.get('VOL_SPIKE_SLOW','120')),
-                                              mult=     float(os.environ.get('VOL_SPIKE_MULT','2.0')))
-
-        if adx_val >= float(os.environ.get('ADX_LIMIT','28')) or spike:
-            print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
-            ex.cancel_all_orders(symbol)
-            time.sleep(10)
-            continue
-
     dg = DynamicGrid(ex, risk, state, GridParams(
         levels=int(os.environ.get('GRID_LEVELS','16')),
         capital=float(os.environ.get('GRID_CAPITAL','200')),
@@ -59,6 +40,26 @@ def main():
     while True:
         metrics['adx'] = adx_val
         tri_edge = 0.0  # tri_arb calc kenarda; sonra bağlayacağız
+        # --- GUARDS ---
+        # 1) ADX (trend break) – 1m OHLCV ile kabaca ölç
+        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)
+        ohlc4 = [(row[1], row[2], row[3], row[4]) for row in ohlc]
+        adx_val = adx14(ohlc4)
+
+        # 2) Volatilite spike – hızlı/yavaş std oranı
+        closes_full = [row[4] for row in ohlc]  # son 120 close
+        spike = volatility_spike(
+            closes_full,
+            win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
+            win_slow=int(os.environ.get('VOL_SPIKE_SLOW', '120')),
+            mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0'))
+        )
+
+        if adx_val >= float(os.environ.get('ADX_LIMIT', '28')) or spike:
+            print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
+            ex.cancel_all_orders(symbol)
+            time.sleep(10)
+            continue
         mode = pick_mode(metrics, tri_edge)
 
         if mode == 'DYNAMIC_GRID':
