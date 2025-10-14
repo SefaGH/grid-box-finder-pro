@@ -33,6 +33,9 @@ class ExchangeCCXT:
     def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
         return self._rl_wrap(self.ex.fetch_ticker, symbol)
 
+    def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 360):
+        return self._rl_wrap(self.ex.fetch_ohlcv, symbol, timeframe=timeframe, limit=limit)
+
     def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         return self._rl_wrap(self.ex.fetch_open_orders, symbol)
 
