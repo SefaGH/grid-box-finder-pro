@@ -8,6 +8,22 @@ from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
 
+import json, urllib.request
+
+def _tg_send(msg: str):
+    token = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    if not token or not chat_id:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {"chat_id": chat_id, "text": msg, "disable_web_page_preview": True}
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'),
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception:
+        pass
+
 
 def main():
     api_key = os.environ.get('BINGX_API_KEY', '')
@@ -55,6 +71,8 @@ def main():
     last_guard_ts = 0.0
     guard_hits = 0
 
+        _tg_send(f"🟢 Hybrid Paper bot başladı | SYMBOL={symbol} | DRY_RUN={os.environ.get('DRY_RUN','0')} | RUN_SECONDS={os.environ.get('RUN_SECONDS','0')}")
+
     while True:
         # 1) Metrikler (crosses/touches + son kapanışlar)
         metrics = build_metrics(ex, symbol)
@@ -95,6 +113,7 @@ def main():
                 last_guard_ts = now_ts
                 guard_hits = 0
             print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}, cooldown={int(max(0, GUARD_COOLDOWN_SEC - (now_ts - last_guard_ts)))}s")
+                        _tg_send(f"⏸️ Guard: ADX={adx_val:.1f} spike={spike} (cooldown)")
             ex.cancel_all_orders(symbol)
             time.sleep(10)
             continue
@@ -113,6 +132,21 @@ def main():
             pass  # ileride tri.try_execute(...) bağlanacak
 
         time.sleep(10)
+
+
+        # while True üstünde run_seconds/run_cycles varsa:
+        run_seconds = int(os.environ.get("RUN_SECONDS", "0"))
+        run_cycles  = int(os.environ.get("RUN_CYCLES", "0"))
+        start_ts    = time.time()
+        cycles      = 0
+        ...
+            cycles += 1
+            if run_seconds and (time.time() - start_ts) >= run_seconds:
+                _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+                break
+            if run_cycles and cycles >= run_cycles:
+                _tg_send("🟡 Hybrid Paper bot cycle limiti doldu, kapanıyor.")
+                break
 
 
 if __name__ == '__main__':
