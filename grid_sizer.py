@@ -2,24 +2,25 @@
 # -*- coding: utf-8 -*-
 """
 BingX (USDT-M) grid order sizer
-- Çekirdek: ccxt ile market filtrelerini otomatik çek (tick-size, lot-size, min notional)
-- Verilen fiyat bandı (lower..upper) ve seviye sayısına göre eşit-quote dağıtılmış grid üret
-- Her order için: side, price, qty, notional, TP komşu çizgi
-- İsteğe bağlı CSV çıktısı
+- ccxt'den market filtrelerini (tick/step/minNotional/minQty) okur
+- Verilen [lower..upper] bandında, eşit-quote dağıtımıyla grid üretir
+- CLI (build_grid) + programatik kullanım (compute_grid_inline)
 
-Kullanım örneği:
-    python grid_sizer.py --symbol "ETHFI/USDT:USDT" --lower 1.72 --upper 1.82 \
-        --levels 12 --capital 100 --reserve 0.05 --lev 3 --csv ethfi_grid.csv
+Kullanım (CLI):
+  python grid_sizer.py --symbol "BTC/USDT:USDT" --lower 114000 --upper 116000 \
+      --levels 12 --capital 200 --reserve 0.05 --lev 3 --csv grid.csv
 """
 from __future__ import annotations
 import argparse
+import csv
 import math
 from typing import Any, Dict, Tuple, List
 
 try:
     import ccxt  # type: ignore
-except Exception as e:
+except Exception:
     raise SystemExit("ccxt gerekli: pip install ccxt")
+
 
 # ---------- utils ----------
 
@@ -30,62 +31,13 @@ def _to_float(x: Any, default: float = 0.0) -> float:
         return default
 
 
-def extract_filters(market: Dict[str, Any]) -> Tuple[float, float, float, float]:
-    """Return (tick, qty_step, min_notional, min_qty) with robust fallbacks."""
-    tick = 0.0
-    qty_step = 0.0
-    min_notional = 0.0
-    min_qty = 0.0
-
-    # 1) precision hints
-    prec = market.get("precision", {}) or {}
-    p_price = prec.get("price")
-    p_amount = prec.get("amount")
-    if isinstance(p_price, (int, float)) and p_price > 0:
-        tick = 10 ** (-int(p_price))
-    if isinstance(p_amount, (int, float)) and p_amount > 0:
-        qty_step = 10 ** (-int(p_amount))
-
-    # 2) limits
-    lim = market.get("limits", {}) or {}
-    price_lim = lim.get("price", {}) or {}
-    amount_lim = lim.get("amount", {}) or {}
-    cost_lim = lim.get("cost", {}) or {}
-    # Some exchanges store step in 'min' with multiples; others store real steps in 'info'
-    min_qty = _to_float(amount_lim.get("min"), 0.0) or min_qty
-    min_notional = _to_float(cost_lim.get("min"), 0.0) or min_notional
-    if tick == 0.0:
-        tick = _to_float(price_lim.get("min"), 0.0)
-    if qty_step == 0.0:
-        # sometimes amount min is the real step
-        qty_step = _to_float(amount_lim.get("min"), 0.0) or qty_step
-
-    # 3) raw info (exchange-specific)
-    info = market.get("info", {}) or {}
-    # Common field names
-    for k in ("tickSize", "tick_size", "minPrice", "priceTickSize"):
-        if tick == 0.0 and k in info:
-            tick = _to_float(info[k], 0.0)
-    for k in ("stepSize", "step_size", "minQty", "quantityStepSize"):
-        if qty_step == 0.0 and k in info:
-            qty_step = _to_float(info[k], 0.0)
-    for k in ("minNotional", "min_notional", "minNotionalValue", "minOrderValue"):
-        if min_notional == 0.0 and k in info:
-            min_notional = _to_float(info[k], 0.0)
-
-    # Fallbacks
-    if tick <= 0.0:
-        tick = 0.0001
-    if qty_step <= 0.0:
-        qty_step = 0.01
-    if min_notional <= 0.0:
-        min_notional = 5.0
-
-    return (tick, qty_step, min_notional, min_qty)
-
-
 def round_step(x: float, step: float, mode: str = "down") -> float:
-    if step <= 0:
+    """
+    Borsa adımına göre yuvarla.
+    - mode='down': tabana yuvarla (güvenli)
+    - mode='up'  : tavana yuvarla (minNotional için gerektiğinde)
+    """
+    if step is None or step <= 0:
         return x
     n = x / step
     if mode == "down":
@@ -97,68 +49,153 @@ def round_step(x: float, step: float, mode: str = "down") -> float:
     return n * step
 
 
+def extract_filters(market: Dict[str, Any]) -> Tuple[float, float, float, float, float]:
+    """
+    ccxt market objesinden şunları döndürür:
+      (price_step, qty_step, min_notional, min_qty, min_price)
+
+    Öncelik:
+      1) info.filters (Binance/BingX stili)
+      2) limits
+      3) precision (fallback olarak basamak → step)
+    """
+    price_step = 0.0
+    qty_step = 0.0
+    min_notional = 0.0
+    min_qty = 0.0
+    min_price = 0.0
+
+    # (1) info.filters
+    info = market.get("info") or {}
+    filters = info.get("filters") or []
+    for f in filters:
+        ftype = (f.get("filterType") or f.get("filter_type") or "").upper()
+        if ftype in ("PRICE_FILTER", "PRICE_FILTERS"):
+            ts = f.get("tickSize") or f.get("tick_size") or f.get("tick")
+            mp = f.get("minPrice") or f.get("min_price")
+            if ts is not None:
+                price_step = _to_float(ts, 0.0)
+            if mp is not None:
+                min_price = _to_float(mp, 0.0)
+        elif ftype in ("LOT_SIZE", "LOT_SIZE_FILTER", "MARKET_LOT_SIZE"):
+            ss = f.get("stepSize") or f.get("step_size") or f.get("lotStep") or f.get("step")
+            mq = f.get("minQty") or f.get("min_qty")
+            if ss is not None:
+                qty_step = _to_float(ss, 0.0)
+            if mq is not None:
+                min_qty = _to_float(mq, 0.0)
+        elif ftype in ("MIN_NOTIONAL", "NOTIONAL", "NOTIONAL_FILTER"):
+            mn = f.get("minNotional") or f.get("min_notional") or f.get("minNotionalValue")
+            if mn is not None:
+                min_notional = max(min_notional, _to_float(mn, 0.0))
+
+    # (2) limits
+    limits = market.get("limits") or {}
+    cost_min = (limits.get("cost") or {}).get("min")
+    amt_min = (limits.get("amount") or {}).get("min")
+    price_min = (limits.get("price") or {}).get("min")
+    if cost_min is not None:
+        min_notional = max(min_notional, _to_float(cost_min, 0.0))
+    if amt_min is not None:
+        min_qty = max(min_qty, _to_float(amt_min, 0.0))
+    if price_min is not None and not min_price:
+        min_price = _to_float(price_min, 0.0)
+
+    # (3) precision → step fallback
+    prec = market.get("precision") or {}
+    p_prec = prec.get("price")
+    a_prec = prec.get("amount")
+    if price_step <= 0 and isinstance(p_prec, int) and p_prec >= 0:
+        price_step = 10.0 ** (-p_prec) if p_prec > 0 else 0.0
+    if qty_step <= 0 and isinstance(a_prec, int) and a_prec >= 0:
+        qty_step = 10.0 ** (-a_prec) if a_prec > 0 else 0.0
+
+    # Son güvenli fallbacks (makul küçük adımlar ve minNotional)
+    if price_step <= 0:
+        price_step = 0.0001
+    if qty_step <= 0:
+        qty_step = 0.0001
+    if min_notional <= 0:
+        min_notional = 5.0
+
+    return price_step, qty_step, min_notional, min_qty, min_price
+
+
+# ---------- çekirdek mantık ----------
+
+def _equal_quote_qty(price: float, per_quote: float) -> float:
+    return per_quote / max(price, 1e-12)
+
+
 def build_grid(symbol: str, lower: float, upper: float, levels: int,
                capital_usdt: float, reserve: float = 0.05,
                leverage: int = 3,
                steps_out_for_sl: int = 2) -> Dict[str, Any]:
+    """
+    CLI için: borsa filtrelerini ccxt ile çeker ve grid planı üretir.
+    """
     if not (levels >= 2 and upper > lower > 0):
         raise ValueError("geçersiz grid parametreleri")
 
     ex = ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
     markets = ex.load_markets()
     if symbol not in markets:
-        # Sembol map'inde yoksa, benzerleri ara
         alts = [s for s in markets if s.split(":")[0] == symbol.split(":")[0]]
-        msg = f"Sembol bulunamadı: {symbol}. Örnekler: {alts[:5]}"
-        raise ValueError(msg)
+        raise ValueError(f"Sembol bulunamadı: {symbol}. Örnekler: {alts[:5]}")
 
     mkt = markets[symbol]
-    tick, qty_step, min_notional, min_qty = extract_filters(mkt)
+    price_step, qty_step, min_notional, min_qty, min_price = extract_filters(mkt)
 
     step_abs = (upper - lower) / (levels - 1)
     mid = (upper + lower) / 2.0
     step_pct = step_abs / mid
 
     per_order_quote = capital_usdt * (1.0 - reserve) / levels
-
     prices = [lower + i * step_abs for i in range(levels)]
 
     orders: List[Dict[str, Any]] = []
     total_quote = 0.0
     extra_quote_needed = 0.0
 
-    for i, px in enumerate(prices):
-        side = "BUY" if px <= mid else "SELL"
-        price = round_step(px, tick, "down")
+    last = ex.fetch_ticker(symbol)['last']
 
-        # Equal-quote target → quantity
-        qty_f = per_order_quote / price if price > 0 else 0.0
-        qty = max(round_step(qty_f, qty_step, "down"), qty_step, min_qty or 0.0)
-        notional = qty * price
+    for i, raw_p in enumerate(prices):
+        side = "BUY" if raw_p <= mid else "SELL"
 
-        # Enforce min notional by bumping qty upward
+        # fiyatı adım + minPrice'a göre düzelt
+        p = round_step(raw_p, price_step, "down")
+        if min_price:
+            p = max(p, min_price)
+
+        # eşit-quote → miktar
+        qty_f = _equal_quote_qty(p, per_order_quote)
+        qty = round_step(qty_f, qty_step, "down")
+        if min_qty:
+            qty = max(qty, min_qty)
+
+        notional = p * qty
+
+        # minNotional'i sağla (gerekirse yukarı yuvarla)
         if notional < min_notional:
-            need_qty = min_notional / price
+            need_qty = min_notional / max(p, 1e-12)
             bumped = round_step(need_qty, qty_step, "up")
             if bumped > qty:
-                extra_quote_needed += (bumped - qty) * price
+                extra_quote_needed += (bumped - qty) * p
                 qty = bumped
-                notional = qty * price
+                notional = qty * p
 
-        # TP komşu çizgi
-        if side == "BUY":
-            tp_price = prices[min(i + 1, levels - 1)]
-        else:
-            tp_price = prices[max(i - 1, 0)]
-        tp_price = round_step(tp_price, tick, "down")
+        # TP: komşu çizgi
+        tp_raw = prices[min(i + 1, levels - 1)] if side == "BUY" \
+                 else prices[max(i - 1, 0)]
+        tp = round_step(tp_raw, price_step, "down")
 
         orders.append({
             "lvl": i + 1,
             "side": side,
-            "price": round(price, 8),
-            "qty": round(qty, 8),
+            "price": float(p),
+            "qty": float(qty),
             "notional": round(notional, 2),
-            "tp": round(tp_price, 8),
+            "tp": float(tp),
         })
         total_quote += notional
 
@@ -167,10 +204,11 @@ def build_grid(symbol: str, lower: float, upper: float, levels: int,
 
     return {
         "symbol": symbol,
-        "tick": tick,
+        "price_step": price_step,
         "qty_step": qty_step,
         "min_notional": min_notional,
         "min_qty": min_qty,
+        "min_price": min_price,
         "lower": lower,
         "upper": upper,
         "levels": levels,
@@ -186,12 +224,70 @@ def build_grid(symbol: str, lower: float, upper: float, levels: int,
         "extra_quote_needed": round(extra_quote_needed, 2),
         "sl_upper": sl_upper,
         "sl_lower": sl_lower,
+        "last": float(last),
     }
 
 
+def compute_grid_inline(symbol: str, lower: float, upper: float, levels: int,
+                        capital: float, reserve: float = 0.05, lev: int = 1,
+                        exchange=None) -> List[Dict[str, float]]:
+    """
+    Programatik kullanım: dynamic_grid, runner vb. yerlerden çağrılır.
+    - exchange: varsa mevcut ccxt instance'ını ver; yoksa yeni açar.
+    Dönüş: [{'side','price','qty','notional'}, ...]
+    """
+    ex = exchange or ccxt.bingx({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+    markets = ex.load_markets()
+    m = markets[symbol]
+
+    price_step, qty_step, min_notional, min_qty, min_price = extract_filters(m)
+
+    # eşit-quote
+    alloc = capital * (1.0 - reserve)
+    per_n = alloc / max(1, levels)
+
+    step_abs = (upper - lower) / max(1, levels - 1)
+    raw_prices = [lower + i * step_abs for i in range(levels)]
+
+    last = ex.fetch_ticker(symbol)['last']
+    out: List[Dict[str, float]] = []
+
+    for rp in raw_prices:
+        side = 'buy' if rp < last else ('sell' if rp > last else None)
+        if not side:
+            continue
+
+        p = round_step(rp, price_step, "down")
+        if min_price:
+            p = max(p, min_price)
+
+        qty = _equal_quote_qty(p, per_n)
+        qty = round_step(qty, qty_step, "down")
+        if min_qty:
+            qty = max(qty, min_qty)
+
+        notional = p * qty
+        if min_notional and notional < min_notional:
+            need_qty = min_notional / max(p, 1e-12)
+            bumped = round_step(need_qty, qty_step, "up")
+            if bumped <= 0:
+                continue
+            qty = bumped
+            notional = p * qty
+
+        if qty <= 0:
+            continue
+
+        out.append({'side': side, 'price': float(p), 'qty': float(qty), 'notional': float(notional)})
+
+    return out
+
+
+# ---------- CLI ----------
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="BingX USDT-M grid sizer")
-    ap.add_argument("--symbol", required=True, help="örn: ETHFI/USDT:USDT")
+    ap.add_argument("--symbol", required=True, help="örn: BTC/USDT:USDT")
     ap.add_argument("--lower", type=float, required=True)
     ap.add_argument("--upper", type=float, required=True)
     ap.add_argument("--levels", type=int, default=12)
@@ -199,7 +295,7 @@ def main() -> None:
     ap.add_argument("--reserve", type=float, default=0.05)
     ap.add_argument("--lev", type=int, default=3)
     ap.add_argument("--sl_steps", type=int, default=2, help="grid dışı SL için step sayısı")
-    ap.add_argument("--csv", type=str, default="", help="CSV çıktısı yolu (opsiyonel)")
+    ap.add_argument("--csv", type=str, default="", help="CSV çıktısı (opsiyonel)")
     args = ap.parse_args()
 
     res = build_grid(
@@ -215,10 +311,11 @@ def main() -> None:
 
     print("\n=== MARKET FILTERS ===")
     print(f"symbol         : {res['symbol']}")
-    print(f"tick (price)   : {res['tick']}")
+    print(f"price_step     : {res['price_step']}")
     print(f"qty_step       : {res['qty_step']}")
     print(f"min_notional   : {res['min_notional']}")
     print(f"min_qty        : {res['min_qty']}")
+    print(f"min_price      : {res['min_price']}")
 
     print("\n=== GRID SUMMARY ===")
     print(f"lower..upper   : {res['lower']} .. {res['upper']}")
@@ -238,59 +335,12 @@ def main() -> None:
         print(f"{o['lvl']},{o['side']},{o['price']},{o['qty']},{o['notional']},{o['tp']}")
 
     if args.csv:
-        import csv
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=["lvl","side","price","qty","notional","tp"])
             w.writeheader()
             for o in res["orders"]:
                 w.writerow(o)
         print(f"\nCSV yazıldı: {args.csv}")
-
-def compute_grid_inline(symbol: str, lower: float, upper: float, levels: int,
-                        capital: float, reserve: float = 0.05, lev: int = 1,
-                        exchange=None):
-    """
-    grid_sizer.py'nin borsa kuralına uygun (tick/lot/minNotional) grid planını
-    programatik oluşturur. Dönüş: [{'side','price','qty','notional'}, ...]
-    """
-    import ccxt, math
-    ex = exchange or ccxt.bingx()
-    ex.options['defaultType'] = 'swap'
-    markets = ex.load_markets()
-    m = markets[symbol]
-    tick_prec = m['precision']['price']
-    amt_prec  = m['precision']['amount']
-    min_notional = (m.get('limits', {}).get('cost', {}) or {}).get('min', 0.0) or 0.0
-
-    step = (upper - lower) / max(1, levels - 1)
-    prices = [lower + i*step for i in range(levels)]
-
-    # eşit-quote
-    alloc = capital * (1 - reserve)
-    per_n = alloc / max(1, levels)
-
-    last = ex.fetch_ticker(symbol)['last']
-    out = []
-    for p in prices:
-        side = 'buy' if p < last else ('sell' if p > last else None)
-        if not side:
-            continue
-        qty = max(10**-8, per_n / p)
-
-        # precision round
-        def rprice(x):
-            return round(x, tick_prec) if isinstance(tick_prec, int) else x
-        def rqty(x):
-            return round(x, amt_prec) if isinstance(amt_prec, int) else x
-
-        rp = rprice(p)
-        rq = rqty(qty)
-        notional = rp * rq
-        if min_notional and notional < min_notional:
-            continue
-        out.append({'side': side, 'price': rp, 'qty': rq, 'notional': notional})
-    return out
-
 
 
 if __name__ == "__main__":
