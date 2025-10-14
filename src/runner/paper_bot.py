@@ -57,7 +57,7 @@ def main():
 
     closes = [30000.0] * 50
     while True:
-        metrics = build_metrics(ex, symbol)
+        metrics['adx'] = adx_val
         tri_edge = 0.0  # tri_arb calc kenarda; sonra bağlayacağız
         mode = pick_mode(metrics, tri_edge)
 
