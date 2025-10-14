@@ -1,7 +1,12 @@
 name: Hybrid Bot Paper (Dynamic Grid + Strategist)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      RUN_SECONDS:
+        description: "Çalışma süresi (sn) – boşsa sınırsız"
+        required: false
+        default: "0"
 
 concurrency:
   group: hybrid-bot-paper
@@ -25,36 +30,42 @@ jobs:
 
       - name: Run paper bot
         env:
-          # --- Exchange Secrets ---
           BINGX_API_KEY:           ${{ secrets.BINGX_API_KEY }}
           BINGX_API_SECRET:        ${{ secrets.BINGX_API_SECRET }}
 
-          # --- Symbol & Grid Vars ---
           SYMBOL:                  ${{ vars.SYMBOL || 'BTC/USDT:USDT' }}
           GRID_LEVELS:             ${{ vars.GRID_LEVELS || 16 }}
           GRID_CAPITAL:            ${{ vars.GRID_CAPITAL || 200 }}
           ATR_K:                   ${{ vars.ATR_K || 1.2 }}
           RETUNE_SEC:              ${{ vars.RETUNE_SEC || 120 }}
 
-          # --- Risk Vars ---
           MAX_OPEN_NOTIONAL:       ${{ vars.MAX_OPEN_NOTIONAL || 1000 }}
           MAX_SYMBOL_EXPOSURE:     ${{ vars.MAX_SYMBOL_EXPOSURE || 500 }}
           DAILY_MAX_LOSS:          ${{ vars.DAILY_MAX_LOSS || 200 }}
           STOP_PCT:                ${{ vars.STOP_PCT || 0.03 }}
 
-          # --- Tri-Arb Vars (şimdilik opsiyonel) ---
           FEE:                     ${{ vars.FEE || 0.0006 }}
           TRI_EDGE_MIN:            ${{ vars.TRI_EDGE_MIN || 0.0015 }}
 
-          # --- (opsiyonel) Bildirim ---
-          TELEGRAM_TOKEN:          ${{ secrets.TELEGRAM_TOKEN }}
+          # 👇 ADX histerezis değerlerini Variables'tan al
+          ADX_LIMIT_HI:            ${{ vars.ADX_LIMIT_HI || 35 }}
+          ADX_LIMIT_LO:            ${{ vars.ADX_LIMIT_LO || 28 }}
+
+          # 👇 Guard/tuning parametreleri (istersen vars’a ekleyebilirsin)
+          GUARD_COOLDOWN_SEC:      ${{ vars.GUARD_COOLDOWN_SEC || 60 }}
+          GUARD_CONSEC_N:          ${{ vars.GUARD_CONSEC_N || 3 }}
+          MIN_BAND_SHIFT_PCT:      ${{ vars.MIN_BAND_SHIFT_PCT || 0.001 }}
+
+          VOL_SPIKE_FAST:          ${{ vars.VOL_SPIKE_FAST || 20 }}
+          VOL_SPIKE_SLOW:          ${{ vars.VOL_SPIKE_SLOW || 120 }}
+          VOL_SPIKE_MULT:          ${{ vars.VOL_SPIKE_MULT || 2.0 }}
+
+          # Telegram
+          TELEGRAM_BOT_TOKEN:      ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TOKEN:          ${{ secrets.TELEGRAM_TOKEN }}  # eski isim varsa
           TELEGRAM_CHAT_ID:        ${{ secrets.TELEGRAM_CHAT_ID }}
 
-          ADX_LIMIT: 28
-          VOL_SPIKE_FAST: 20
-          VOL_SPIKE_SLOW: 120
-          VOL_SPIKE_MULT: 2.0
-
-          DRY_RUN:                 1 
+          DRY_RUN:                 1
+          RUN_SECONDS:             ${{ github.event.inputs.RUN_SECONDS || 0 }}
         run: |
           python -m src.runner.paper_bot
