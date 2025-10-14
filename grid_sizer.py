@@ -250,36 +250,47 @@ def compute_grid_inline(symbol: str, lower: float, upper: float, levels: int,
                         capital: float, reserve: float = 0.05, lev: int = 1,
                         exchange=None):
     """
-    grid_sizer.py'nin CLI mantığını programatik çağrı ile kullanmamızı sağlar.
-    Dönüş: [{'side': 'buy'/'sell', 'price': float, 'qty': float, 'notional': float}, ...]
+    grid_sizer.py'nin borsa kuralına uygun (tick/lot/minNotional) grid planını
+    programatik oluşturur. Dönüş: [{'side','price','qty','notional'}, ...]
     """
     import ccxt, math
     ex = exchange or ccxt.bingx()
     ex.options['defaultType'] = 'swap'
     markets = ex.load_markets()
     m = markets[symbol]
-    tick = m['precision']['price']
-    lot = m['precision']['amount']
-    min_notional = m.get('limits', {}).get('cost', {}).get('min', 0.0) or 0.0
+    tick_prec = m['precision']['price']
+    amt_prec  = m['precision']['amount']
+    min_notional = (m.get('limits', {}).get('cost', {}) or {}).get('min', 0.0) or 0.0
 
     step = (upper - lower) / max(1, levels - 1)
-    prices = [lower + i * step for i in range(levels)]
+    prices = [lower + i*step for i in range(levels)]
 
-    # eşit-quote dağıt
-    per = capital * (1 - reserve) / max(1, levels)
-    out = []
+    # eşit-quote
+    alloc = capital * (1 - reserve)
+    per_n = alloc / max(1, levels)
+
     last = ex.fetch_ticker(symbol)['last']
+    out = []
     for p in prices:
         side = 'buy' if p < last else ('sell' if p > last else None)
         if not side:
             continue
-        qty = max(10**-8, per / p)
-        # Basit yuvarlama (precision), min_notional kontrolü:
-        notional = p * qty
+        qty = max(10**-8, per_n / p)
+
+        # precision round
+        def rprice(x):
+            return round(x, tick_prec) if isinstance(tick_prec, int) else x
+        def rqty(x):
+            return round(x, amt_prec) if isinstance(amt_prec, int) else x
+
+        rp = rprice(p)
+        rq = rqty(qty)
+        notional = rp * rq
         if min_notional and notional < min_notional:
             continue
-        out.append({'side': side, 'price': p, 'qty': qty, 'notional': notional})
+        out.append({'side': side, 'price': rp, 'qty': rq, 'notional': notional})
     return out
+
 
 
 if __name__ == "__main__":
