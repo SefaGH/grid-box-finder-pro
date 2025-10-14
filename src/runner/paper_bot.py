@@ -6,6 +6,7 @@ from src.strategy.dynamic_grid import DynamicGrid, GridParams
 from src.strategy.strategist import pick_mode
 from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
+from src.core.guards import adx14, volatility_spike
 
 def main():
     api_key = os.environ.get('BINGX_API_KEY', '')
@@ -25,6 +26,25 @@ def main():
     )
     risk = RiskGate(limits)
     state = JsonState('state.paper.json')
+
+            # --- GUARDS ---
+        # 1) ADX (trend break) – 1m OHLCV ile kabaca ölç
+        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)
+        ohlc4 = [(o,h,l,c) for _,o,h,l,c,_ in []]  # placeholder; ccxt dönerken [ts,o,h,l,c,v]
+        ohlc4 = [(row[1],row[2],row[3],row[4]) for row in ohlc]
+        adx_val = adx14(ohlc4)
+
+        # 2) Volatilite spike – hızlı/yavaş std oranı
+        closes_full = [row[4] for row in ohlc]  # son 120 close
+        spike = volatility_spike(closes_full, win_fast= int(os.environ.get('VOL_SPIKE_FAST','20')),
+                                              win_slow= int(os.environ.get('VOL_SPIKE_SLOW','120')),
+                                              mult=     float(os.environ.get('VOL_SPIKE_MULT','2.0')))
+
+        if adx_val >= float(os.environ.get('ADX_LIMIT','28')) or spike:
+            print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
+            ex.cancel_all_orders(symbol)
+            time.sleep(10)
+            continue
 
     dg = DynamicGrid(ex, risk, state, GridParams(
         levels=int(os.environ.get('GRID_LEVELS','16')),
