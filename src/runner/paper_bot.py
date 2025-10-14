@@ -74,7 +74,12 @@ def main():
                 trend_blocked = True
 
         # Hits sayacı
-        spike = volatility_spike(...)
+        spike = volatility_spike(
+            closes_full,
+            win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
+            win_slow=int(os.environ.get('VOL_SPIKE_SLOW', '120')),
+            mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0'))
+        )
         if trend_blocked or spike:
             guard_hits += 1
         else:
