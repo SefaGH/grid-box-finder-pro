@@ -7,15 +7,10 @@ from src.strategy.strategist import pick_mode
 from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
-last_notify_bucket = {"k": None}
 
+last_notify_bucket = {"k": None}
 def _adx_bucket(x: float) -> str:
-    # 0-28, 28-35, 35-45, 45-60, 60+
-    if x < 28: return "lo_<28"
-    if x < 35: return "lo_28_35"
-    if x < 45: return "hi_35_45"
-    if x < 60: return "hi_45_60"
-    return "hi_60p"
+    return "hi_60p" if x>=60 else ("hi_45_60" if x>=45 else ("hi_35_45" if x>=35 else ("lo_28_35" if x>=28 else "lo_<28")))
 
 def _tg_send(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
@@ -62,7 +57,7 @@ def main():
             levels=int(os.environ.get("GRID_LEVELS", "16")),
             capital=float(os.environ.get("GRID_CAPITAL", "200")),
             atr_k=float(os.environ.get("ATR_K", "1.2")),
-            retune_sec=int(os.environ.get("RETUNE_SEC", "180")),
+            retune_sec=int(os.environ.get("RETUNE_SEC", "120")),
         ),
     )
 
@@ -73,10 +68,12 @@ def main():
     )
 
     # Guard konfig (Variables)
-    ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", "35"))
-    ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", "28"))
-    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "90"))
-    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "5"))
+    # Guard konfig (Variables / env)
+    ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT")  # opsiyonel tek eşik
+    ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", ADX_LIMIT_ENV or "35"))
+    ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", str(float(ADX_LIMIT_ENV) - 7 if ADX_LIMIT_ENV else 28)))
+    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "60"))
+    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "3"))
 
     # Süre/iterasyon sınırı (Run workflow input’undan gelebilir)
     run_seconds = int(os.environ.get("RUN_SECONDS", "0"))  # 0 = sınırsız
