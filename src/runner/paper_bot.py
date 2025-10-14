@@ -85,6 +85,14 @@ def main():
             time.sleep(10)
             continue
 
+        # Tri-arb gözlem (örnek üçlü)
+        tri_pairs = ('BTC/USDT:USDT', 'ETH/USDT:USDT', 'BTC/ETH')  # BTC->ETH->USDT->BTC tarzı için mantıksal yön gerekir
+        try:
+            tri_edge = 0.0
+            # tri_edge = tri.calc_edge(*tri_pairs)  # istersen aktif et
+        except Exception as e:
+            tri_edge = 0.0
+
         # 3) Strateji seçimi ve yürütme (DRY_RUN logları aktif)
         tri_edge = 0.0  # tri_arb kenarda; edge hesaplayıp geçişe bağlayacağız
         mode = pick_mode(metrics, tri_edge)
