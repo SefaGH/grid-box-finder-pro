@@ -18,36 +18,25 @@ class GridParams:
     stop_pct: float = 0.03
 
 class DynamicGrid:
-    def __init__(self, ex: ExchangeCCXT, risk: RiskGate, state: JsonState, params: GridParams):
-        self.ex = ex
-        self.risk = risk
-        self.state = state
-        self.params = params
+    def __init__(...):
+        ...
         self._last_tune = 0
-
-    def _compute_band(self, closes: List[float]) -> Tuple[float,float]:
-        sd = stddev(closes, 20)
-        mid = sum(closes[-20:])/min(20,len(closes))
-        lower = mid - 2*sd
-        upper = mid + 2*sd
-        if lower <= 0: lower = closes[-1]*0.9
-        return lower, upper
-
-    def _grid_prices(self, lower: float, upper: float, levels: int) -> List[float]:
-        step = (upper - lower) / max(1, levels-1)
-        return [lower + i*step for i in range(levels)]
+        self._last_band = None
+        self._min_band_shift = float(os.environ.get('MIN_BAND_SHIFT_PCT', '0.001'))
 
     def retune_and_place(self, symbol: str, closes: List[float]):
-        now = time.time()
-        if now - self._last_tune < self.params.retune_sec:
-            return
-        self._last_tune = now
-
-        # alt-üst bant hesapla
+        ...
         lower, upper = self._compute_band(closes)
 
-        # grid planını oluştur
-        from grid_sizer import compute_grid_inline
+        # küçük kaymalarda re-place yapma
+        if self._last_band:
+            l0, u0 = self._last_band
+            base = max(1e-9, (u0 - l0))
+            shift = (abs(lower - l0) + abs(upper - u0)) / base
+            if shift < self._min_band_shift:
+                return
+        self._last_band = (lower, upper)
+
         plan = compute_grid_inline(
             symbol=symbol,
             lower=lower,
@@ -59,15 +48,11 @@ class DynamicGrid:
             exchange=self.ex.ex
         )
 
-        # risk kontrolü
         total_plan = sum(x['notional'] for x in plan) if plan else 0.0
         if not self.risk.check_order(symbol, total_plan):
-            print("[RISK] Plan toplam notional sınırını aşıyor, grid kurulmadı.")
+            print("[RISK] Plan toplam notional limitini aşıyor.")
             return
 
-        # eski emirleri iptal et
         self.ex.cancel_all_orders(symbol)
-
-        # emirleri yerleştir
         for line in plan:
             self.ex.create_order(symbol, line['side'], 'limit', line['qty'], line['price'])
