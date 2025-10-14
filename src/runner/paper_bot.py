@@ -8,6 +8,15 @@ from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
 
+ADX_LIMIT_HI = float(os.environ.get('ADX_LIMIT_HI', '35'))
+ADX_LIMIT_LO = float(os.environ.get('ADX_LIMIT_LO', '28'))
+GUARD_COOLDOWN_SEC = int(os.environ.get('GUARD_COOLDOWN_SEC', '60'))
+GUARD_CONSEC_N     = int(os.environ.get('GUARD_CONSEC_N', '3'))
+
+trend_blocked = False
+last_guard_ts = 0
+guard_hits = 0
+
 def main():
     api_key = os.environ.get('BINGX_API_KEY', '')
     api_secret = os.environ.get('BINGX_API_SECRET', '')
@@ -43,18 +52,32 @@ def main():
         closes = metrics.get("closes", [])
 
         # 2) Guards: ADX & spike (1m ohlcv)
-        ohlc = ex.fetch_ohlcv(symbol, timeframe='1m', limit=120)  # [ts,o,h,l,c,v]
-        ohlc4 = [(row[1], row[2], row[3], row[4]) for row in ohlc]
-        adx_val = adx14(ohlc4)
-        closes_full = [row[4] for row in ohlc]
-        spike = volatility_spike(
-            closes_full,
-            win_fast=int(os.environ.get('VOL_SPIKE_FAST', '20')),
-            win_slow=int(os.environ.get('VOL_SPIKE_SLOW', '120')),
-            mult=float(os.environ.get('VOL_SPIKE_MULT', '2.0'))
-        )
+        now_ts = time.time()
 
-        metrics['adx'] = adx_val  # strateji seçicide kullanılacak
+        # Histerezisli trend bloğu
+        if trend_blocked:
+            if adx_val <= ADX_LIMIT_LO:
+                trend_blocked = False
+        else:
+            if adx_val >= ADX_LIMIT_HI:
+                trend_blocked = True
+
+        # Hits sayacı
+        spike = volatility_spike(...)
+        if trend_blocked or spike:
+            guard_hits += 1
+        else:
+            guard_hits = 0
+
+        in_cooldown = (now_ts - last_guard_ts) < GUARD_COOLDOWN_SEC
+        if guard_hits >= GUARD_CONSEC_N or in_cooldown:
+            if guard_hits >= GUARD_CONSEC_N:
+                last_guard_ts = now_ts
+                guard_hits = 0
+            print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}, cooldown={int(max(0, GUARD_COOLDOWN_SEC - (now_ts - last_guard_ts)))}s")
+            ex.cancel_all_orders(symbol)
+            time.sleep(10)
+            continue
 
         if adx_val >= float(os.environ.get('ADX_LIMIT', '28')) or spike:
             print(f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}. Cancel all & skip.")
