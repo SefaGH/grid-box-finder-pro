@@ -56,29 +56,36 @@ def main():
         risk,
         state,
         GridParams(
-            levels=int(os.environ.get("GRID_LEVELS", "16")),
-            capital=float(os.environ.get("GRID_CAPITAL", "200")),
-            atr_k=float(os.environ.get("ATR_K", "1.2")),
-            retune_sec=int(os.environ.get("RETUNE_SEC", "120")),
+            levels=int(os.environ.get("GRID_LEVELS") or "16"),
+            capital=float(os.environ.get("GRID_CAPITAL") or "200"),
+            atr_k=float(os.environ.get("ATR_K") or "1.2"),
+            retune_sec=int(os.environ.get("RETUNE_SEC") or "120"),
         ),
+    )
+
+    limits = RiskLimits(
+        max_open_notional=float(os.environ.get("MAX_OPEN_NOTIONAL") or "1000"),
+        max_symbol_exposure=float(os.environ.get("MAX_SYMBOL_EXPOSURE") or "500"),
+        daily_max_loss=float(os.environ.get("DAILY_MAX_LOSS") or "200"),
+        stop_pct=float(os.environ.get("STOP_PCT") or "0.03"),
     )
 
     tri = TriArb(
         ex,
-        fee_rate=float(os.environ.get("FEE", "0.0006")),
-        edge_min=float(os.environ.get("TRI_EDGE_MIN", "0.0015")),
+        fee_rate=float(os.environ.get("FEE") or "0.0006"),
+        edge_min=float(os.environ.get("TRI_EDGE_MIN") or "0.0015"),
     )
 
-    # --- Guard konfig (env) ---
-    ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT")  # tek eşik vermek istersen
-    ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", ADX_LIMIT_ENV or "35"))
-    ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", str(float(ADX_LIMIT_ENV) - 7 if ADX_LIMIT_ENV else 28)))
-    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "60"))
-    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "3"))
+    # Guard konfig
+    ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT") or ""
+    ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI") or (ADX_LIMIT_ENV or "35"))
+    ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO") or (str(float(ADX_LIMIT_ENV) - 7) if ADX_LIMIT_ENV else "28"))
+    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC") or "60")
+    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N") or "3")
 
-    # --- Süre/iterasyon sınırı ---
-    run_seconds = int(os.environ.get("RUN_SECONDS", "0"))  # 0 = sınırsız
-    run_cycles  = int(os.environ.get("RUN_CYCLES", "0"))   # 0 = sınırsız
+    # Süre/iterasyon
+    run_seconds = int(os.environ.get("RUN_SECONDS") or "0")
+    run_cycles  = int(os.environ.get("RUN_CYCLES") or "0")
     start_ts    = time.time()
     end_ts      = start_ts + run_seconds if run_seconds > 0 else 0.0
     cycles      = 0
