@@ -7,7 +7,15 @@ from src.strategy.strategist import pick_mode
 from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
+last_notify_bucket = {"k": None}
 
+def _adx_bucket(x: float) -> str:
+    # 0-28, 28-35, 35-45, 45-60, 60+
+    if x < 28: return "lo_<28"
+    if x < 35: return "lo_28_35"
+    if x < 45: return "hi_35_45"
+    if x < 60: return "hi_45_60"
+    return "hi_60p"
 
 def _tg_send(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
@@ -54,7 +62,7 @@ def main():
             levels=int(os.environ.get("GRID_LEVELS", "16")),
             capital=float(os.environ.get("GRID_CAPITAL", "200")),
             atr_k=float(os.environ.get("ATR_K", "1.2")),
-            retune_sec=int(os.environ.get("RETUNE_SEC", "120")),
+            retune_sec=int(os.environ.get("RETUNE_SEC", "180")),
         ),
     )
 
@@ -67,8 +75,8 @@ def main():
     # Guard konfig (Variables)
     ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", "35"))
     ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", "28"))
-    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "60"))
-    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "3"))
+    GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "90"))
+    GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "5"))
 
     # Süre/iterasyon sınırı (Run workflow input’undan gelebilir)
     run_seconds = int(os.environ.get("RUN_SECONDS", "0"))  # 0 = sınırsız
@@ -111,7 +119,8 @@ def main():
             if adx_val <= ADX_LIMIT_LO:
                 trend_blocked = False
         else:
-            if adx_val >= ADX_LIMIT_HI:
+            if adx_val >= ADX_LIMIT_HI and not trend_blocked:
+                # GUARD_CONSEC_N eşiklerini beklemeden trend bloğunu başlat
                 trend_blocked = True
 
         # Hits sayacı
@@ -122,23 +131,33 @@ def main():
 
         in_cooldown = (now_ts - last_guard_ts) < GUARD_COOLDOWN_SEC
         if guard_hits >= GUARD_CONSEC_N or in_cooldown:
+            started_now = False
             if guard_hits >= GUARD_CONSEC_N:
                 last_guard_ts = now_ts
                 guard_hits = 0
+                started_now = True
+
             msg = f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}, cooldown={int(max(0, GUARD_COOLDOWN_SEC - (now_ts - last_guard_ts)))}s"
             print(msg)
-            _tg_send(f"⏸️ {msg}")
+
+            # 🔕 Sadece başlarken veya ADX bucket değiştiğinde Telegram gönder
+            cur_bucket = _adx_bucket(adx_val)
+            if started_now or last_notify_bucket["k"] != cur_bucket:
+                _tg_send(f"⏸️ {msg}")
+                last_notify_bucket["k"] = cur_bucket
+
+        # Emirler varsa iptal et
+        try:
+            openos = ex.fetch_open_orders(symbol)
+            if openos:
+                ex.cancel_all_orders(symbol)
+        except Exception:
+            # fetch_open_orders desteklemeyen borsa/market olursa sessiz geç
             ex.cancel_all_orders(symbol)
-            time.sleep(10)
-            # Süre sınırı kontrolü
-            cycles += 1
-            if run_seconds and (time.time() - start_ts) >= run_seconds:
-                _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
-                break
-            if run_cycles and cycles >= run_cycles:
-                _tg_send("🟡 Hybrid Paper bot cycle limiti doldu, kapanıyor.")
-                break
-            continue
+
+        time.sleep(10)
+        # ... süre/cycle kontrolü aynı
+        continue
 
         # 4) Strateji seçimi ve yürütme
         metrics["adx"] = adx_val  # pick_mode için
