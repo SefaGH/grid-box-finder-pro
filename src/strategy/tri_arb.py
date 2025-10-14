@@ -13,9 +13,10 @@ class TriArb:
         net = gross * (1 - self.fee)**3
         return net - 1
 
-    def try_execute(self, a: str, b: str, c: str, quote_amount: float) -> Tuple[bool, float]:
+    def try_execute(self, a: str, b: str, c: str, quote_amount: float):
         edge = self.calc_edge(a,b,c)
         if edge < self.edge_min:
+            print(f"[TRI_ARB] edge={edge:.4f} < min={self.edge_min:.4f} -> pass")
             return False, edge
-        # gerçek uygulama: orderbook yönleri ve miktar akışı
+        print(f"[TRI_ARB][DRY_RUN] a={a}, b={b}, c={c}, edge={edge:.4f}, quote={quote_amount}")
         return True, edge
