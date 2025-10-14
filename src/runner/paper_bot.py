@@ -157,16 +157,22 @@ def main():
             except Exception:
                 ex.cancel_all_orders(symbol)
 
-            # Uyumadan önce sert bitiş kontrolü
-            if end_ts:
-                left = end_ts - time.time()
-                if left <= 0:
-                    _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
-                    break
-                time.sleep(min(10, max(1, left)))
+            # guard bloğu içinde, sleep/continue ETMEDEN hemen önce:
+            if adx_val <= ADX_LIMIT_LO:
+                # düşük ADX’te cooldown’ı kırıp trade’e dön
+                last_guard_ts = 0.0
+                # sleep/continue YAPMADAN guard bloğundan çık
             else:
-                time.sleep(10)
-            continue
+                # mevcut davranış
+                if end_ts:
+                    left = end_ts - time.time()
+                    if left <= 0:
+                        _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+                        break
+                    time.sleep(min(10, max(1, left)))
+                else:
+                    time.sleep(10)
+                continue
 
         # 4) Strateji seçimi ve yürütme
         metrics["adx"] = adx_val
