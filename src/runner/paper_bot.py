@@ -8,9 +8,10 @@ from src.strategy.tri_arb import TriArb
 from src.strategy.metrics_feed import build_metrics
 from src.core.guards import adx14, volatility_spike
 
+# --- Telegram & bildirim bucket yardımcıları ---
 last_notify_bucket = {"k": None}
 def _adx_bucket(x: float) -> str:
-    return "hi_60p" if x>=60 else ("hi_45_60" if x>=45 else ("hi_35_45" if x>=35 else ("lo_28_35" if x>=28 else "lo_<28")))
+    return "hi_60p" if x >= 60 else ("hi_45_60" if x >= 45 else ("hi_35_45" if x >= 35 else ("lo_28_35" if x >= 28 else "lo_<28")))
 
 def _tg_send(msg: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
@@ -20,11 +21,7 @@ def _tg_send(msg: str) -> None:
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         data = {"chat_id": chat_id, "text": msg, "disable_web_page_preview": True}
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=10).read()
     except Exception:
         pass
@@ -67,36 +64,37 @@ def main():
         edge_min=float(os.environ.get("TRI_EDGE_MIN", "0.0015")),
     )
 
-    # Guard konfig (Variables)
-    # Guard konfig (Variables / env)
-    ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT")  # opsiyonel tek eşik
+    # --- Guard konfig (tamamı env/Variables üzerinden) ---
+    ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT")  # tek eşik vermek istersen
     ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", ADX_LIMIT_ENV or "35"))
     ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", str(float(ADX_LIMIT_ENV) - 7 if ADX_LIMIT_ENV else 28)))
     GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "60"))
     GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "3"))
 
-    # Süre/iterasyon sınırı (Run workflow input’undan gelebilir)
+    # --- Süre sınırı (Run workflow input’undan gelebilir) ---
     run_seconds = int(os.environ.get("RUN_SECONDS", "0"))  # 0 = sınırsız
-    run_cycles = int(os.environ.get("RUN_CYCLES", "0"))    # 0 = sınırsız
-    start_ts = time.time()
-    cycles = 0
+    run_cycles  = int(os.environ.get("RUN_CYCLES", "0"))   # 0 = sınırsız
+    start_ts    = time.time()
+    cycles      = 0
 
-    # Guard durum değişkenleri
+    # --- Guard durum değişkenleri ---
     trend_blocked = False
     last_guard_ts = 0.0
-    guard_hits = 0
+    guard_hits    = 0
 
-    # Başlangıç ping
-    _tg_send(
-        f"🟢 Hybrid Paper bot başladı | SYMBOL={symbol} | DRY_RUN={os.environ.get('DRY_RUN','0')} | RUN_SECONDS={os.environ.get('RUN_SECONDS','0')}"
-    )
+    _tg_send(f"🟢 Hybrid Paper bot başladı | SYMBOL={symbol} | DRY_RUN={os.environ.get('DRY_RUN','0')} | RUN_SECONDS={os.environ.get('RUN_SECONDS','0')}")
 
     while True:
-        # 1) Metrikler (crosses/touches + son kapanışlar)
+        # Mutlak süre kontrolü (döngü başında)
+        if run_seconds and (time.time() - start_ts) >= run_seconds:
+            _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+            break
+
+        # 1) Metrikler
         metrics = build_metrics(ex, symbol)
         closes = metrics.get("closes", [])
 
-        # 2) ADX & spike için 1m OHLCV çek ve hesapla
+        # 2) ADX & spike
         ohlc = ex.fetch_ohlcv(symbol, timeframe="1m", limit=120)  # [ts,o,h,l,c,v]
         ohlc4 = [(row[1], row[2], row[3], row[4]) for row in ohlc]
         adx_val = adx14(ohlc4)
@@ -111,16 +109,13 @@ def main():
         # 3) Guard/histerezis + cooldown/debounce
         now_ts = time.time()
 
-        # Histerezis: trend engeli
         if trend_blocked:
             if adx_val <= ADX_LIMIT_LO:
                 trend_blocked = False
         else:
-            if adx_val >= ADX_LIMIT_HI and not trend_blocked:
-                # GUARD_CONSEC_N eşiklerini beklemeden trend bloğunu başlat
+            if adx_val >= ADX_LIMIT_HI:
                 trend_blocked = True
 
-        # Hits sayacı
         if trend_blocked or spike:
             guard_hits += 1
         else:
@@ -137,36 +132,35 @@ def main():
             msg = f"[GUARD] Pause: ADX={adx_val:.1f}, spike={spike}, cooldown={int(max(0, GUARD_COOLDOWN_SEC - (now_ts - last_guard_ts)))}s"
             print(msg)
 
-            # 🔕 Sadece başlarken veya ADX bucket değiştiğinde Telegram gönder
+            # Telegram: sadece başlarken veya ADX bucket değişince
             cur_bucket = _adx_bucket(adx_val)
             if started_now or last_notify_bucket["k"] != cur_bucket:
                 _tg_send(f"⏸️ {msg}")
                 last_notify_bucket["k"] = cur_bucket
 
-        # Emirler varsa iptal et
-        try:
-            openos = ex.fetch_open_orders(symbol)
-            if openos:
+            # ❗ İptal & uyku & continue — guard BLOĞU İÇİNDE
+            try:
+                openos = ex.fetch_open_orders(symbol)
+                if openos:
+                    ex.cancel_all_orders(symbol)
+            except Exception:
                 ex.cancel_all_orders(symbol)
-        except Exception:
-            # fetch_open_orders desteklemeyen borsa/market olursa sessiz geç
-            ex.cancel_all_orders(symbol)
 
-        time.sleep(10)
-        # ... süre/cycle kontrolü aynı
-        continue
+            # kısa uyku
+            time.sleep(10)
+            continue
 
         # 4) Strateji seçimi ve yürütme
-        metrics["adx"] = adx_val  # pick_mode için
+        metrics["adx"] = adx_val
         tri_edge = 0.0  # tri.calc_edge(...) ileride aktif edilecek
         mode = pick_mode(metrics, tri_edge)
 
         if mode == "DYNAMIC_GRID" and closes:
             dg.retune_and_place(symbol, closes)
         elif mode == "TRI_ARB":
-            pass  # ileride tri.try_execute(...) bağlanacak
+            pass  # tri.try_execute(...) bağlanacak
 
-        # Süre/iterasyon sınırı
+        # Süre/iterasyon sınırı + uyku
         cycles += 1
         if run_seconds and (time.time() - start_ts) >= run_seconds:
             _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
