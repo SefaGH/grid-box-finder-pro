@@ -55,6 +55,9 @@ jobs:
           CCXT_TIMEOUT_MS:      ${{ vars.CCXT_TIMEOUT_MS || 15000 }}
           RUN_SECONDS:          ${{ github.event.inputs.RUN_SECONDS || 0 }}
           DRY_RUN:              1
+
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           echo "Run seconds: $RUN_SECONDS"
           python -m src.runner.paper_bot
