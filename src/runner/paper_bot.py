@@ -36,6 +36,11 @@ def main():
     symbol = os.environ.get("SYMBOL", "BTC/USDT:USDT")
     ex = ExchangeCCXT(api_key, api_secret, [symbol])
     ex.load_markets()
+    # ccxt timeout (aşırı beklemeyi önlemek için)
+    try:
+        ex.ex.timeout = int(os.environ.get("CCXT_TIMEOUT_MS", "15000"))  # 15s
+    except Exception:
+        pass
 
     limits = RiskLimits(
         max_open_notional=float(os.environ.get("MAX_OPEN_NOTIONAL", "1000")),
@@ -64,17 +69,18 @@ def main():
         edge_min=float(os.environ.get("TRI_EDGE_MIN", "0.0015")),
     )
 
-    # --- Guard konfig (tamamı env/Variables üzerinden) ---
+    # --- Guard konfig (env) ---
     ADX_LIMIT_ENV = os.environ.get("ADX_LIMIT")  # tek eşik vermek istersen
     ADX_LIMIT_HI = float(os.environ.get("ADX_LIMIT_HI", ADX_LIMIT_ENV or "35"))
     ADX_LIMIT_LO = float(os.environ.get("ADX_LIMIT_LO", str(float(ADX_LIMIT_ENV) - 7 if ADX_LIMIT_ENV else 28)))
     GUARD_COOLDOWN_SEC = int(os.environ.get("GUARD_COOLDOWN_SEC", "60"))
     GUARD_CONSEC_N = int(os.environ.get("GUARD_CONSEC_N", "3"))
 
-    # --- Süre sınırı (Run workflow input’undan gelebilir) ---
+    # --- Süre/iterasyon sınırı ---
     run_seconds = int(os.environ.get("RUN_SECONDS", "0"))  # 0 = sınırsız
     run_cycles  = int(os.environ.get("RUN_CYCLES", "0"))   # 0 = sınırsız
     start_ts    = time.time()
+    end_ts      = start_ts + run_seconds if run_seconds > 0 else 0.0
     cycles      = 0
 
     # --- Guard durum değişkenleri ---
@@ -85,14 +91,19 @@ def main():
     _tg_send(f"🟢 Hybrid Paper bot başladı | SYMBOL={symbol} | DRY_RUN={os.environ.get('DRY_RUN','0')} | RUN_SECONDS={os.environ.get('RUN_SECONDS','0')}")
 
     while True:
-        # Mutlak süre kontrolü (döngü başında)
-        if run_seconds and (time.time() - start_ts) >= run_seconds:
+        # Mutlak bitiş kontrolü (döngü başında)
+        if end_ts and time.time() >= end_ts:
             _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
             break
 
         # 1) Metrikler
         metrics = build_metrics(ex, symbol)
         closes = metrics.get("closes", [])
+
+        # Bitiş kontrolü (ağ çağrılarından önce)
+        if end_ts and time.time() >= end_ts:
+            _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+            break
 
         # 2) ADX & spike
         ohlc = ex.fetch_ohlcv(symbol, timeframe="1m", limit=120)  # [ts,o,h,l,c,v]
@@ -138,7 +149,7 @@ def main():
                 _tg_send(f"⏸️ {msg}")
                 last_notify_bucket["k"] = cur_bucket
 
-            # ❗ İptal & uyku & continue — guard BLOĞU İÇİNDE
+            # İptal (yalnızca açık emir varsa)
             try:
                 openos = ex.fetch_open_orders(symbol)
                 if openos:
@@ -146,8 +157,15 @@ def main():
             except Exception:
                 ex.cancel_all_orders(symbol)
 
-            # kısa uyku
-            time.sleep(10)
+            # Uyumadan önce sert bitiş kontrolü
+            if end_ts:
+                left = end_ts - time.time()
+                if left <= 0:
+                    _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+                    break
+                time.sleep(min(10, max(1, left)))
+            else:
+                time.sleep(10)
             continue
 
         # 4) Strateji seçimi ve yürütme
@@ -160,16 +178,16 @@ def main():
         elif mode == "TRI_ARB":
             pass  # tri.try_execute(...) bağlanacak
 
-        # Süre/iterasyon sınırı + uyku
+        # Süre/iterasyon sınırı + uyku (kalan süreye göre)
         cycles += 1
-        if run_seconds and (time.time() - start_ts) >= run_seconds:
-            _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
-            break
-        if run_cycles and cycles >= run_cycles:
-            _tg_send("🟡 Hybrid Paper bot cycle limiti doldu, kapanıyor.")
-            break
-
-        time.sleep(10)
+        if end_ts:
+            left = end_ts - time.time()
+            if left <= 0:
+                _tg_send("🟡 Hybrid Paper bot süre doldu, kapanıyor.")
+                break
+            time.sleep(min(10, max(1, left)))
+        else:
+            time.sleep(10)
 
 
 if __name__ == "__main__":
